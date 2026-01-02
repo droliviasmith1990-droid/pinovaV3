@@ -132,7 +132,7 @@ export default function CampaignDetailPage() {
     // We intentionally only want this to run on mount/id change. 
     // The poll handles updates.
     
-    }, [campaign?.status, loadCampaignData, loadGeneratedPins]);
+
 
     // Function to load generated pins
     const loadGeneratedPins = useCallback(async (reset = false) => {
