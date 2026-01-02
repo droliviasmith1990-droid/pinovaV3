@@ -85,7 +85,7 @@ export async function POST(req: NextRequest) {
 
         // 2. Send Events to Inngest (Batched)
         console.log('[API] Sending batched events to Inngest...');
-        const BATCH_SIZE = 75; // Reduced from 100 (timeout) - targeting ~45s per batch
+        const BATCH_SIZE = 25; // Adjusted to 25 to strictly avoid 60s Vercel timeouts (est. 15-20s exec time)
         const events = [];
         const totalRows = csvRows.length;
 
