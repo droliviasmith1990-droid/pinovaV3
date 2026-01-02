@@ -7,6 +7,7 @@ const log = (...args: unknown[]) => DEBUG && console.log(...args);
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
+import Image from 'next/image';
 import { ArrowLeft, Loader2, Settings, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/auth/AuthContext';
@@ -72,31 +73,40 @@ export default function CampaignDetailPage() {
         }
     }, [authLoading, currentUser, router]);
 
-    // Load campaign and template
-    useEffect(() => {
-        const loadData = async () => {
-            if (!campaignId) return;
+    // Load campaign stats (polled)
+    const loadCampaignData = useCallback(async (isPolling = false) => {
+        if (!campaignId) return;
 
-            setIsLoading(true);
-            try {
-                // Load campaign
-                const campaignData = await getCampaign(campaignId);
-                if (!campaignData) {
+        // Only show full loading spinner on initial mount
+        if (!isPolling && !campaign) setIsLoading(true);
+        
+        try {
+            // Load campaign
+            const campaignData = await getCampaign(campaignId);
+            if (!campaignData) {
+                if (!isPolling) {
                     toast.error('Campaign not found');
                     router.push('/dashboard/campaigns');
-                    return;
                 }
-                setCampaign(campaignData);
+                return;
+            }
+            
+            // Update campaign state - use functional update to verify if change is needed could be better 
+            // but for now, simple set depends on React to diff objects slightly? 
+            // Actually getCampaign returns new obj. 
+            setCampaign(campaignData);
 
-                // Load campaign settings if they exist
-                if (campaignData.generation_settings) {
-                    const savedSettings = campaignData.generation_settings as unknown as GenerationSettings;
-                    if (savedSettings.batchSize && savedSettings.quality && savedSettings.pauseEnabled !== undefined) {
-                        setSettings(savedSettings);
-                    }
+            // Load campaign settings if they exist and we haven't loaded them
+            // (Only on first load ideally, but checks are cheap)
+            if (campaignData.generation_settings) {
+                const savedSettings = campaignData.generation_settings as unknown as GenerationSettings;
+                if (savedSettings.batchSize && savedSettings.quality && savedSettings.pauseEnabled !== undefined) {
+                    setSettings(prev => ({...prev, ...savedSettings}));
                 }
+            }
 
-                // Load template
+            // Load template if not already loaded (this is one-off)
+            if (!templateData) {
                 const fetchedTemplate = await getTemplate(campaignData.template_id);
                 if (fetchedTemplate) {
                     setTemplateData(fetchedTemplate);
@@ -106,18 +116,23 @@ export default function CampaignDetailPage() {
                         background_color: fetchedTemplate.background_color || '#ffffff',
                     });
                 }
-
-                // Pins will be loaded by a separate effect after campaign is set
-            } catch (error) {
-                console.error('Error loading campaign:', error);
-                toast.error('Failed to load campaign');
-            } finally {
-                setIsLoading(false);
             }
-        };
+        } catch (error) {
+            console.error('Error loading campaign:', error);
+            if (!isPolling) toast.error('Failed to load campaign');
+        } finally {
+            if (!isPolling) setIsLoading(false);
+        }
+    }, [campaignId, router, templateData, campaign]); // adding deps
 
-        loadData();
-    }, [campaignId, router]);
+    // Initial load
+    useEffect(() => {
+        loadCampaignData(false);
+    }, [campaignId]); // eslint-disable-line react-hooks/exhaustive-deps 
+    // We intentionally only want this to run on mount/id change. 
+    // The poll handles updates.
+    
+    }, [campaign?.status, loadCampaignData, loadGeneratedPins]);
 
     // Function to load generated pins
     const loadGeneratedPins = useCallback(async (reset = false) => {
@@ -161,16 +176,21 @@ export default function CampaignDetailPage() {
             if (pinsResult.success && pinsResult.data) {
                 const mappedPins: PinCardData[] = pinsResult.data
                     .filter((pin: Record<string, unknown>) => pin.image_url)
-                    .map((pin: Record<string, unknown>, index: number) => ({
-                        id: (pin.id as string) || `pin-${index}`,
-                        // FIX: Use global index fallback if data_row.rowIndex is missing to prevent duplicate numbers on different pages
-                        rowIndex: pin.data_row ? (pin.data_row as any).rowIndex ?? ((currentPage - 1) * pagination.limit + index) : ((currentPage - 1) * pagination.limit + index), 
-                        imageUrl: pin.image_url as string,
-                        // FIX: Map DB 'generated' status to UI 'completed' status so PinCard shows the image
-                        status: ((pin.status as string) === 'generated' ? 'completed' : (pin.status as any)) || 'completed',
-                        errorMessage: pin.error_message as string | undefined,
-                        csvData: pin.data_row as Record<string, string>,
-                    }));
+                    .map((pin: Record<string, unknown>, index: number) => {
+                        const dataRow = pin.data_row as Record<string, unknown> | undefined;
+                        const rowIndex = typeof dataRow?.rowIndex === 'number' 
+                            ? dataRow.rowIndex 
+                            : ((currentPage - 1) * pagination.limit + index);
+                        
+                        return {
+                            id: (pin.id as string) || `pin-${index}`,
+                            rowIndex,
+                            imageUrl: pin.image_url as string,
+                            status: ((pin.status as string) === 'generated' ? 'completed' : (pin.status as 'pending' | 'processing' | 'failed' | 'completed')) || 'completed',
+                            errorMessage: pin.error_message as string | undefined,
+                            csvData: (pin.data_row || {}) as Record<string, string>,
+                        };
+                    });
 
                 setGeneratedPins(prev => {
                     const newPins = reset ? mappedPins : [...prev, ...mappedPins];
@@ -775,12 +795,16 @@ export default function CampaignDetailPage() {
                     className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80"
                     onClick={() => setPreviewPin(null)}
                 >
-                    <img
-                        src={previewPin.imageUrl}
-                        alt={`Pin ${previewPin.rowIndex + 1}`}
-                        className="max-w-full max-h-[90vh] rounded-lg shadow-2xl"
-                        onClick={(e) => e.stopPropagation()}
-                    />
+                    <div className="relative" onClick={(e) => e.stopPropagation()}>
+                         <Image
+                            src={previewPin.imageUrl}
+                            alt={`Pin ${previewPin.rowIndex + 1}`}
+                            width={1000}
+                            height={1500}
+                            className="max-w-full max-h-[90vh] w-auto h-auto rounded-lg shadow-2xl"
+                            unoptimized
+                        />
+                    </div>
                 </div>
             )}
         </div>
