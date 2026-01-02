@@ -1,6 +1,7 @@
 import * as fabric from 'fabric';
 import { Element, TextElement, ImageElement, ShapeElement, FrameElement } from '@/types/editor';
 import { getImageCache } from '@/lib/canvas/ImagePreloadCache';
+import { calculateBestFitFontSize } from '@/lib/canvas/AutoFitText';
 
 // Debug flag for verbose logging - disabled in production for performance
 const DEBUG_RENDER = process.env.NODE_ENV === 'development' || process.env.DEBUG_RENDER === 'true';
@@ -478,17 +479,42 @@ async function createFabricObject(
         // Apply text transform AFTER field substitution
         text = applyTextTransform(text, textEl.textTransform);
 
+        // Calculate font size (Auto-Fit or Fixed)
+        let fontSize = textEl.fontSize || 24;
+        let charSpacing = textEl.letterSpacing || 0;
+        
+        if (textEl.autoFit && textEl.width && textEl.height) {
+            const fitResult = calculateBestFitFontSize(text, textEl.width, textEl.height, {
+                fontFamily: textEl.fontFamily || 'Arial',
+                fontWeight: textEl.fontWeight || 'normal',
+                fontStyle: (textEl.fontStyle as string) || 'normal',
+                lineHeight: textEl.lineHeight || 1.2,
+                textAlign: textEl.align || 'left',
+                charSpacing: textEl.letterSpacing || 0,
+                minFontSize: textEl.minFontSize || 10,
+                maxFontSize: textEl.maxFontSize || 500,
+                maxLines: textEl.maxLines, // Optional soft limit
+            });
+            fontSize = fitResult.fontSize;
+            charSpacing = fitResult.charSpacing;
+            
+            if (DEBUG_RENDER && (fontSize !== textEl.fontSize || charSpacing !== (textEl.letterSpacing || 0))) {
+                console.log(`[Engine] Auto-Fit applied: ${textEl.name} -> Size: ${fontSize}, Spacing: ${charSpacing}`);
+            }
+        }
+
         // MINIMAL: Just create a basic textbox
         const textbox = new fabric.Textbox(text, {
             ...commonOptions,
             width: textEl.width,
-            fontSize: textEl.fontSize || 24,
+            fontSize: fontSize,
             fontFamily: textEl.fontFamily || 'Arial',
             fontWeight: textEl.fontWeight || 'normal',
             fontStyle: textEl.fontStyle?.includes('italic') ? 'italic' : 'normal',
             fill: textEl.fill || '#000000',
             textAlign: textEl.align || 'left',
             lineHeight: textEl.lineHeight || 1.2,
+            charSpacing: charSpacing, // Ensure spacing is applied (potentially compressed)
         });
 
         fabricObject = textbox;

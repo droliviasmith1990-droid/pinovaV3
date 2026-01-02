@@ -82,9 +82,9 @@ export const TextPropertiesSection = memo(function TextPropertiesSection({ eleme
         
         try {
             return {
-                short: calculateBestFitFontSize(samples.short, liveElement.width, liveElement.height, config),
-                medium: calculateBestFitFontSize(samples.medium, liveElement.width, liveElement.height, config),
-                long: calculateBestFitFontSize(samples.long, liveElement.width, liveElement.height, config),
+                short: calculateBestFitFontSize(samples.short, liveElement.width, liveElement.height, config).fontSize,
+                medium: calculateBestFitFontSize(samples.medium, liveElement.width, liveElement.height, config).fontSize,
+                long: calculateBestFitFontSize(samples.long, liveElement.width, liveElement.height, config).fontSize,
             };
         } catch {
             return null;
