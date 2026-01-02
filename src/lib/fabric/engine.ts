@@ -483,10 +483,13 @@ async function createFabricObject(
         let fontSize = textEl.fontSize || 24;
         let charSpacing = textEl.letterSpacing || 0;
         
+        // Standardize font weight to avoid faux-bold measurement errors
+        const renderFontWeight = textEl.fontProvider === 'custom' ? 'normal' : (textEl.fontWeight || 'normal');
+
         if (textEl.autoFit && textEl.width && textEl.height) {
             const fitResult = calculateBestFitFontSize(text, textEl.width, textEl.height, {
                 fontFamily: textEl.fontFamily || 'Arial',
-                fontWeight: textEl.fontWeight || 'normal',
+                fontWeight: renderFontWeight,
                 fontStyle: (textEl.fontStyle as string) || 'normal',
                 lineHeight: textEl.lineHeight || 1.2,
                 textAlign: textEl.align || 'left',
@@ -509,12 +512,14 @@ async function createFabricObject(
             width: textEl.width,
             fontSize: fontSize,
             fontFamily: textEl.fontFamily || 'Arial',
-            fontWeight: textEl.fontWeight || 'normal',
+            fontWeight: renderFontWeight,
             fontStyle: textEl.fontStyle?.includes('italic') ? 'italic' : 'normal',
             fill: textEl.fill || '#000000',
             textAlign: textEl.align || 'left',
             lineHeight: textEl.lineHeight || 1.2,
             charSpacing: charSpacing, // Ensure spacing is applied (potentially compressed)
+            underline: textEl.textDecoration === 'underline',
+            linethrough: textEl.textDecoration === 'line-through',
         });
 
         fabricObject = textbox;

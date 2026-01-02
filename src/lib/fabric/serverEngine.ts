@@ -697,24 +697,27 @@ async function renderElement(
         
         // Calculate font size - use auto-fit if enabled
         let fontSize = textEl.fontSize || 16;
+        let charSpacing = (textEl.letterSpacing || 0) * 10;
+
+        // CRITICAL: Ensure measurement uses EXACTLY the same font weight as rendering
+        // Custom fonts often don't have bold variants mapped, so we force normal to avoid fallback to default fonts (which messes up width calc)
+        const renderFontWeight = textEl.fontProvider === 'custom' ? 'normal' : String(fontWeight);
         
         // AUTO-FIT: Calculate optimal font size if enabled
         if (textEl.autoFit && textEl.width && textEl.height) {
-            const autoFitFontSize = calculateBestFitFontSize(text, textEl.width, textEl.height, {
+            const fitResult = calculateBestFitFontSize(text, textEl.width, textEl.height, {
                 fontFamily: safeFontFamily,
-                fontWeight: String(fontWeight),
+                fontWeight: renderFontWeight,
                 fontStyle: fontStyle,
                 lineHeight: textEl.lineHeight || 1.2,
                 textAlign: textEl.align || 'left',
-                charSpacing: (textEl.letterSpacing || 0) * 10,
-                // SWITCHBOARD BEHAVIOR: Use element.fontSize as minimum bound
-                // This is the user's base font size - auto-fit will calculate between [fontSize, maxFontSize]
-                minFontSize: textEl.fontSize || 16,
+                charSpacing: charSpacing,
+                minFontSize: textEl.minFontSize || 16,
                 maxFontSize: textEl.maxFontSize || 500,
                 maxLines: textEl.maxLines,
                 
-                // Style properties for accurate measurement
-                paintFirst: 'fill', // Default
+                // Style properties
+                paintFirst: 'fill',
                 underline: textEl.textDecoration === 'underline',
                 linethrough: textEl.textDecoration === 'line-through',
                 
@@ -723,9 +726,10 @@ async function renderElement(
             });
             
             if (DEBUG) {
-                console.log(`[ServerEngine] AUTO-FIT: "${text.substring(0, 30)}..." fontSize ${fontSize} -> ${autoFitFontSize}`);
+                console.log(`[ServerEngine] AUTO-FIT: "${text.substring(0, 30)}..." fontSize ${fontSize} -> ${fitResult.fontSize}, Spacing: ${fitResult.charSpacing}`);
             }
-            fontSize = autoFitFontSize;
+            fontSize = fitResult.fontSize;
+            charSpacing = fitResult.charSpacing;
         }
         
         const textbox = new Textbox(text, {
@@ -736,10 +740,9 @@ async function renderElement(
             fill: textEl.fill || '#000000',
             textAlign: textEl.align || 'left',
             lineHeight: textEl.lineHeight || 1.2,
-            charSpacing: (textEl.letterSpacing || 0) * 10,
-            // Font weight: For custom fonts, use native weight from font file (don't synthetic weight)
-            // For other fonts, use fontWeight property (100-900), fallback to fontStyle for backward compatibility
-            fontWeight: textEl.fontProvider === 'custom' ? 'normal' : (textEl.fontWeight || (textEl.fontStyle?.includes('bold') ? 'bold' : 'normal')),
+            charSpacing: charSpacing,
+            // Use same standardized weight
+            fontWeight: renderFontWeight,
             fontStyle: textEl.fontStyle?.includes('italic') ? 'italic' : 'normal',
             underline: textEl.textDecoration === 'underline',
             linethrough: textEl.textDecoration === 'line-through',
