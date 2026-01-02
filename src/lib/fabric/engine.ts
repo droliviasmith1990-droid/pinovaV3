@@ -176,7 +176,7 @@ async function loadImageToCanvas(url: string, options: Partial<fabric.ImageProps
         catch { return createErrorPlaceholder(options.width as number, options.height as number); }
     }
     
-    const knownCorsBlockedDomains = ['s3.tebi.io', 'tebi.io', 'amazonaws.com'];
+    const knownCorsBlockedDomains = ['amazonaws.com'];
     const needsProxy = knownCorsBlockedDomains.some(d => url.includes(d));
 
     if (needsProxy) {
@@ -208,8 +208,9 @@ function replaceDynamicFields(text: string, rowData: Record<string, string>, fie
 export function getDynamicImageUrl(element: ImageElement, rowData: Record<string, string>, fieldMapping: FieldMapping): string {
     const src = element.imageUrl || '';
     
-    // For Canva backgrounds, use proxy but avoid double-encoding
-    if (element.isCanvaBackground && src) {
+    // For Canva backgrounds, use proxy ONLY if not on our storage
+    // Now that CORS is enabled on Tebi, we can load directly
+    if (element.isCanvaBackground && src && !src.includes('tebi.io') && !src.includes('public.blob.vercel-storage.com')) {
         // If src is already a proxy URL, return as-is
         if (src.startsWith('/api/proxy-image')) {
             return src;
@@ -219,7 +220,6 @@ export function getDynamicImageUrl(element: ImageElement, rowData: Record<string
             return src;
         }
         // Otherwise, proxy the URL (encoding only if not already encoded)
-        // Check if URL appears to already be encoded (contains %XX patterns)
         const needsEncoding = !src.includes('%3A') && !src.includes('%2F');
         return `/api/proxy-image?url=${needsEncoding ? encodeURIComponent(src) : src}`;
     }
