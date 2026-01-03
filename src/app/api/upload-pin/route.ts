@@ -115,10 +115,15 @@ export async function POST(request: NextRequest) {
 
         // Generate S3 key
         const timestamp = Date.now();
-        const key = `pins/${campaign_id}/${rowIndex}-${timestamp}.png`;
+        // Determine extension from mime type
+        let extension = 'png';
+        if (file.type === 'image/jpeg') extension = 'jpg';
+        else if (file.type === 'image/webp') extension = 'webp';
+        
+        const key = `pins/${campaign_id}/${rowIndex}-${timestamp}.${extension}`;
         const bucket = process.env.TEBI_BUCKET!;
 
-        log('[upload-pin] Uploading to:', { bucket, key });
+        log('[upload-pin] Uploading to:', { bucket, key, contentType: file.type });
 
         // PERFORMANCE: Stream upload instead of buffering entire file in memory
         // Convert Web Stream to Node.js Readable stream for AWS SDK
@@ -131,7 +136,7 @@ export async function POST(request: NextRequest) {
                 Bucket: bucket,
                 Key: key,
                 Body: fileStream,
-                ContentType: file.type || 'image/png',
+                ContentType: file.type || `image/${extension}`,
                 ACL: 'public-read',
                 ContentLength: file.size, // Helps S3 know size upfront
             },

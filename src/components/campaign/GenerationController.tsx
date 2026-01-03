@@ -533,12 +533,12 @@ export function GenerationController({
             const tRender = performance.now();
 
             // Export to blob - OPTIMIZED: Use JPEG directly (faster, smaller)
-            // JPEG 0.9 is visually equivalent to PNG but 5-10x smaller
+            // JPEG 0.8 offers excellent quality/size balance (visually similar to 0.9 but 20-30% smaller)
             const multiplier = QUALITY_MAP[settings.quality];
             const blob = await exportToBlob(canvas, { 
                 multiplier, 
                 format: 'jpeg', 
-                quality: 0.9 
+                quality: 0.8 
             });
             const tBlob = performance.now();
 
