@@ -9,7 +9,7 @@
  */
 
 import * as fabricNode from 'fabric/node';
-import { StaticCanvas, Rect, FabricImage, Textbox, Circle, Path, Color } from 'fabric/node';
+import { StaticCanvas, Rect, FabricImage, Textbox, Circle, Path } from 'fabric/node';
 import { Element, TextElement, ImageElement, ShapeElement, FrameElement } from '@/types/editor';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -55,7 +55,7 @@ if (!process.env.PANGOCAIRO_BACKEND) {
 let canvasModule: any = null;
 try {
     canvasModule = typeof require === 'function' ? eval('require')('canvas') : null;
-} catch (e) {
+} catch {
     console.warn('[ServerEngine] Canvas module not found (this is expected during build time)');
 }
 const { registerFont } = canvasModule || {};
@@ -210,9 +210,9 @@ async function downloadGoogleFont(family: string, weight: string = 'normal', sty
                 registeredFonts.add(fontKey);
                 console.log(`[ServerEngine:Font] CACHE HIT: Registered ${family} from ${cachedPath}`);
                 return true;
-            } catch (err) {
+            } catch {
                 console.error(`[ServerEngine:Font] Corrupt cache file ${cachedPath}, deleting...`);
-                try { fs.unlinkSync(cachedPath); } catch (e) {}
+                try { fs.unlinkSync(cachedPath); } catch {}
             }
         }
     }
@@ -242,7 +242,7 @@ async function downloadGoogleFont(family: string, weight: string = 'normal', sty
                     console.log(`[ServerEngine:Font] DOWNLOAD SUCCESS: ${family} saved to ${cachedPath} (License: ${license})`);
                     return true;
                 }
-            } catch (e) {
+            } catch {
                 // Continue to next variant/license
             }
         }
@@ -697,7 +697,7 @@ async function renderElement(
         
         // Calculate font size - use auto-fit if enabled
         let fontSize = textEl.fontSize || 16;
-        let charSpacing = (textEl.letterSpacing || 0) * 10;
+        let charSpacing = textEl.letterSpacing || 0;
 
         // CRITICAL: Ensure measurement uses EXACTLY the same font weight as rendering
         // Custom fonts often don't have bold variants mapped, so we force normal to avoid fallback to default fonts (which messes up width calc)
