@@ -298,6 +298,14 @@ export function GenerationController({
     const pausedAtRef = useRef<number | null>(null);
     const totalPausedDurationRef = useRef<number>(0);
 
+    const statusRef = useRef(status);
+    const campaignIdRef = useRef(campaignId);
+
+    useEffect(() => {
+        statusRef.current = status;
+        campaignIdRef.current = campaignId;
+    }, [status, campaignId]);
+
     // Throttled progress saver
     const throttledSaveProgressRef = useRef(
         throttle((data: Parameters<typeof saveProgress>[0]) => {
@@ -312,31 +320,100 @@ export function GenerationController({
 
     // Sync status based on actual progress
     useEffect(() => {
+        // 🚀 FIX: If not processing, respect valid generatedCount from DB even if 0
+        // This fixes the issue where DB reset (0) was ignored because progress.current (84) was used fallback
+        if (status !== 'processing' && typeof generatedCount === 'number') {
+            if (generatedCount === 0 && progress.current > 0) {
+                // Detected reset
+                log('[Sync] Detected reset from DB. Resetting local state.');
+                clearProgress();
+                setStatus('pending');
+                onStatusChange('pending');
+                setProgress(prev => ({
+                    ...prev,
+                    current: 0,
+                    total: csvData.length,
+                    percentage: 0,
+                    status: 'idle',
+                    // Reset timing
+                    startTime: null,
+                    elapsedTime: 0,
+                    pausedDuration: 0,
+                    currentSpeed: 0,
+                    estimatedTimeRemaining: 0
+                }));
+                return;
+            }
+        }
+
         const actualCount = generatedCount || progress.current;
         const total = csvData.length;
         const isComplete = actualCount >= total;
 
-        if (isComplete && status !== 'completed') {
+        if (isComplete && status !== 'completed' && status !== 'failed') {
             setStatus('completed');
             onStatusChange('completed');
             clearProgress();
         }
 
+        // Just purely for cleanup of stale resume state
         if (savedState && actualCount > savedState.lastCompletedIndex + 1) {
-            clearProgress();
+             // If we have advanced beyond saved state, clear it
+             // clearProgress(); // Don't aggressive clear, let user clear or completion clear
         }
-    }, [canResume, status, generatedCount, progress.current, csvData.length, onStatusChange, savedState, clearProgress]);
+    }, [status, generatedCount, progress.current, csvData.length, onStatusChange, savedState, clearProgress]);
 
-    // Cleanup on unmount
+    // Cleanup on unmount / unload
     useEffect(() => {
         isMountedRef.current = true;
+
+        const handleUnload = () => {
+            const currentStatus = statusRef.current;
+            const currentCampaignId = campaignIdRef.current;
+
+            if (currentStatus === 'processing' && renderMode === 'client') {
+                // Use text/plain to avoid CORS preflight options check which can fail on unload
+                // The API route is updated to parse this text as JSON
+                const blob = new Blob(
+                    [JSON.stringify({ status: 'paused', campaignId: currentCampaignId })], 
+                    { type: 'text/plain' }
+                );
+                
+                if (navigator.sendBeacon) {
+                    navigator.sendBeacon('/api/campaigns/update-status-beacon', blob);
+                } else {
+                    // Fallback using fetch with keepalive 
+                    // Note: sending to the beacon endpoint is fine as it handles the logic
+                    fetch('/api/campaigns/update-status-beacon', { 
+                        method: 'POST',
+                        body: blob,
+                        keepalive: true,
+                        headers: { 'Content-Type': 'text/plain' }
+                    }).catch(console.error);
+                }
+            }
+        };
+
+        window.addEventListener('beforeunload', handleUnload);
+        
+        // Reliability Fix: Also trigger on visibility change (mobile/tab switch)
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'hidden') {
+                handleUnload();
+            }
+        };
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+
         return () => {
             isMountedRef.current = false;
             throttledSaveProgressRef.current.cancel();
-            // Note: Pool canvases are NOT disposed on unmount
-            // They stay in the global pool for reuse across sessions
+            window.removeEventListener('beforeunload', handleUnload);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+            
+            // Trigger on component unmount
+            handleUnload();
         };
-    }, []);
+    }, [renderMode]); // Stable dependency, status tracked via ref
 
     // ============================================
     // Realtime Subscription for Server Mode
@@ -626,7 +703,10 @@ export function GenerationController({
 
                 log(`[Batch] Rendering pins ${batchStart}-${batchEnd - 1} (${batchSize} pins)`);
 
-                let renderResults: Array<{
+                // CLIENT MODE: Chunked parallel processing
+                const batchRows = csvData.slice(batchStart, batchEnd);
+                
+                type RenderResult = {
                     success: boolean;
                     pinNumber: number;
                     blob?: Blob;
@@ -634,12 +714,12 @@ export function GenerationController({
                     url?: string;
                     error?: string;
                     rowData: Record<string, string>;
-                }> = [];
+                };
 
-                // CLIENT MODE: Chunked parallel processing
-                const batchRows = csvData.slice(batchStart, batchEnd);
-                const chunkResults: typeof renderResults = [];
-                const batchRenderedPins: Array<{ rowIndex: number; url: string; rowData: Record<string, string> }> = [];
+                const chunkResults: RenderResult[] = [];
+                // batchRenderedPins was removed as we now save incrementally
+                
+                // Process in chunks of CLIENT_PARALLEL_LIMIT
                 
                 // Process in chunks of CLIENT_PARALLEL_LIMIT
                 for (let chunkStart = 0; chunkStart < batchRows.length; chunkStart += CLIENT_PARALLEL_LIMIT) {
@@ -679,10 +759,7 @@ export function GenerationController({
                                 throw new Error(uploadResult.error || 'Upload failed');
                             }
 
-                            // Collect for batch DB save
-                            batchRenderedPins.push({ rowIndex, url: uploadResult.url, rowData });
-
-                            // 3. Update UI immediately (instant feedback)
+                            // 3. Update UI instantly
                             onPinGenerated({
                                 id: `${campaignId}-${rowIndex}`,
                                 rowIndex: rowIndex,
@@ -717,115 +794,102 @@ export function GenerationController({
                     const chunkDuration = performance.now() - chunkStartTime;
                     const pinsPerSec = (chunk.length / (chunkDuration / 1000)).toFixed(2);
                     console.log(`[Client] Chunk ${Math.floor(chunkStart / CLIENT_PARALLEL_LIMIT)}: ${chunk.length} pins in ${chunkDuration.toFixed(0)}ms (${pinsPerSec} pins/sec)`);
-                }
-                
-                // 🚀 BATCH SAVE to DB: Single request for all rendered pins
-                if (batchRenderedPins.length > 0) {
-                    try {
-                        await fetch('/api/generated-pins', {
-                            method: 'PATCH',
-                            headers: { 'Content-Type': 'application/json' },
-                            credentials: 'include',
-                            body: JSON.stringify({
-                                pins: batchRenderedPins.map(p => ({
-                                    campaign_id: campaignId,
-                                    user_id: userId,
-                                    image_url: p.url,
-                                    data_row: p.rowData,
-                                    status: 'completed',
-                                }))
-                            }),
-                        });
-                    } catch (dbError) {
-                        console.error('[Client] Batch DB save failed:', dbError);
-                        // Individual saves already happened via UI updates, so this is non-critical
-                    }
-                }
-                
-                renderResults = chunkResults;
 
+                    // 🚀 INCREMENTAL SAVE: Save successful pins from this chunk to DB immediately
+                    const pinsToSave = chunkResult.filter(r => r.success && r.url).map(p => ({
+                        campaign_id: campaignId,
+                        user_id: userId,
+                        image_url: p.url,
+                        data_row: { ...p.rowData, rowIndex: p.pinNumber }, // 🚀 CRITICAL: Persist rowIndex for reliable deduplication
+                        status: 'completed',
+                    }));
+
+                    if (pinsToSave.length > 0) {
+                        try {
+                            await fetch('/api/generated-pins', {
+                                method: 'PATCH',
+                                headers: { 'Content-Type': 'application/json' },
+                                credentials: 'include',
+                                body: JSON.stringify({ pins: pinsToSave }),
+                            });
+                        } catch (dbError) {
+                            console.error('[Client] Chunk DB save failed:', dbError);
+                        }
+                    }
+
+                    // 🚀 INCREMENTAL SAVE (ERRORS): Persist failed pins
+                    const failedToSave = chunkResult.filter(r => !r.success);
+                    if (failedToSave.length > 0) {
+                        for (const failed of failedToSave) {
+                             try {
+                                await fetch('/api/generated-pins', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    credentials: 'include',
+                                    body: JSON.stringify({
+                                        campaign_id: campaignId,
+                                        user_id: userId,
+                                        image_url: '',
+                                        data_row: { ...csvData[failed.pinNumber], rowIndex: failed.pinNumber }, // 🚀 CRITICAL: Persist rowIndex
+                                        status: 'failed',
+                                        error_message: failed.error,
+                                    }),
+                                });
+                            } catch (persistError) {
+                                console.error(`[Batch] Failed to persist error for pin ${failed.pinNumber}:`, persistError);
+                            }
+                        }
+                    }
+
+                    // 🚀 INCREMENTAL PROGRESS: Update progress after every chunk
+                    const currentProgress = batchStart + chunkStart + chunk.length;
+                    
+                    // Save progress to LocalStorage (Zustand)
+                    throttledSaveProgressRef.current({
+                        campaignId,
+                        lastCompletedIndex: currentProgress - 1,
+                        totalPins: csvData.length,
+                        status: 'processing'
+                    });
+
+                    // Calculate timing metrics
+                    const metrics = calculateProgressMetrics({
+                        completed: currentProgress,
+                        total: csvData.length,
+                        startTime: startTimeRef.current,
+                        pausedDuration: totalPausedDurationRef.current,
+                        isPaused: false,
+                        currentTime: Date.now(),
+                    });
+
+                    // Update UI Progress and Trigger DB Campaign Update (via page.tsx)
+                    const newProgressData: GenerationProgress = {
+                        current: currentProgress,
+                        total: csvData.length,
+                        percentage: Math.round((currentProgress / csvData.length) * 100),
+                        status: 'generating',
+                        errors,
+                        startTime: startTimeRef.current,
+                        elapsedTime: metrics.elapsedTimeMs,
+                        pausedDuration: totalPausedDurationRef.current,
+                        currentSpeed: metrics.pinsPerSecond,
+                        estimatedTimeRemaining: metrics.etaSeconds * 1000,
+                        currentPinTitle: `Pin ${currentProgress}`,
+                        currentPinIndex: currentProgress,
+                    };
+                    setProgress(newProgressData);
+                    onProgressUpdate(newProgressData);
+                }
+                
+                // Batch complete
+                current = batchEnd;
+                
                 if (!isMountedRef.current) return;
                 if (shouldPauseRef.current) break;
 
-                // ============================================
-                // Step 3: Handle failed renders
-                // ============================================
-                const failedRenders = renderResults.filter(r => !r.success);
-                for (const failed of failedRenders) {
-                    // Persist failed pin to database
-                    try {
-                        await fetch('/api/generated-pins', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            credentials: 'include',
-                            body: JSON.stringify({
-                                campaign_id: campaignId,
-                                user_id: userId,
-                                image_url: '',
-                                data_row: csvData[failed.pinNumber],
-                                status: 'failed',
-                                error_message: failed.error,
-                            }),
-                        });
-                    } catch (persistError) {
-                        console.error(`[Batch] Failed to persist error for pin ${failed.pinNumber}:`, persistError);
-                    }
-
-                    // Report failed pin to UI
-                    onPinGenerated({
-                        id: `${campaignId}-${failed.pinNumber}`,
-                        rowIndex: failed.pinNumber,
-                        imageUrl: '',
-                        status: 'failed',
-                        errorMessage: failed.error,
-                        csvData: csvData[failed.pinNumber],
-                    });
-                }
-
-                // ============================================
-                // Step 4: Update progress after batch
-                // ============================================
-                current = batchEnd;
+                // Log batch completion
                 const batchDuration = Date.now() - batchStartTime;
-                log(`[Batch] Completed ${batchSize} pins in ${batchDuration}ms (${(batchSize / batchDuration * 1000).toFixed(1)} pins/sec)`);
-                
-                // Save progress
-                throttledSaveProgressRef.current({
-                    campaignId,
-                    lastCompletedIndex: batchEnd - 1,
-                    totalPins: csvData.length,
-                    status: 'processing'
-                });
-
-                // Calculate timing metrics for ETA
-                const lastRowData = csvData[batchEnd - 1] || {};
-                const currentPinTitle = lastRowData.title || lastRowData.name || lastRowData.product_name || `Row ${batchEnd}`;
-                const metrics = calculateProgressMetrics({
-                    completed: current,
-                    total: csvData.length,
-                    startTime: startTimeRef.current,
-                    pausedDuration: totalPausedDurationRef.current,
-                    isPaused: false,
-                    currentTime: Date.now(),
-                });
-
-                // Update progress with timing metrics
-                const newProgress: GenerationProgress = {
-                    current,
-                    total: csvData.length,
-                    percentage: Math.round((current / csvData.length) * 100),
-                    status: 'generating',
-                    errors,
-                    startTime: startTimeRef.current,
-                    elapsedTime: metrics.elapsedTimeMs,
-                    pausedDuration: totalPausedDurationRef.current,
-                    currentSpeed: metrics.pinsPerSecond,
-                    estimatedTimeRemaining: metrics.etaSeconds * 1000,
-                    currentPinTitle,
-                    currentPinIndex: current,
-                };
-                setProgress(newProgress);
-                onProgressUpdate(newProgress);
+                log(`[Batch] Completed ${batchSize} pins in ${batchDuration}ms`);
             }
 
             if (!isMountedRef.current) return;
@@ -885,9 +949,19 @@ export function GenerationController({
     // Resume generation
     const resumeGeneration = useCallback(() => {
         if (status === 'paused') {
-            startGeneration(progress.current);
+             // SMART RESUME LOGIC (Matching Green Button)
+             // Calculate best resume index by checking all reliable sources
+             const lastDbIndex = generatedCount ? generatedCount - 1 : -1;
+             const savedIndex = savedState ? savedState.lastCompletedIndex : -1;
+             const currentIndex = progress.current > 0 ? progress.current - 1 : -1;
+             
+             // Pick the furthest progress point
+             const bestLastIndex = Math.max(lastDbIndex, savedIndex, currentIndex);
+             
+             // Start from the NEXT pin
+             startGeneration(bestLastIndex + 1);
         }
-    }, [status, progress.current, startGeneration]);
+    }, [status, progress.current, generatedCount, savedState, startGeneration]);
 
     // Regenerate all
     const regenerateAll = useCallback(async () => {
@@ -957,26 +1031,29 @@ export function GenerationController({
                 </div>
             )}
 
-            {/* Resume from Saved State */}
-            {canResume && !isStale && status !== 'processing' && status !== 'completed' && savedState &&
-                savedState.lastCompletedIndex < savedState.totalPins - 1 &&
-                (generatedCount || progress.current) < csvData.length && (() => {
-                    const pinsRemaining = Math.max(0, csvData.length - savedState.lastCompletedIndex - 1);
-                    return pinsRemaining > 0;
-                })() && (
+            {/* Resume from Saved State - SMART RESUME LOGIC */}
+            {canResume && !isStale && status !== 'processing' && status !== 'completed' && savedState && (() => {
+                // Calculate smart resume index: Max of local saved state OR confirmed DB count
+                const lastDbIndex = generatedCount ? generatedCount - 1 : -1;
+                const smartLastIndex = Math.max(savedState.lastCompletedIndex, lastDbIndex);
+                const pinsRemaining = Math.max(0, csvData.length - smartLastIndex - 1);
+                
+                if (pinsRemaining <= 0) return null;
+
+                return (
                     <div className="flex items-center gap-3 p-4 bg-green-50 border border-green-200 rounded-lg">
                         <div className="flex-1">
                             <p className="text-sm font-medium text-green-900">
                                 Resume Available
                             </p>
                             <p className="text-xs text-green-700">
-                                {Math.max(0, csvData.length - savedState!.lastCompletedIndex - 1)} of {csvData.length} pins remaining
+                                {pinsRemaining} of {csvData.length} pins remaining
                             </p>
                         </div>
                         <button
                             onClick={() => {
-                                startGeneration(savedState!.lastCompletedIndex + 1);
-                                toast.info(`Resuming from pin ${savedState!.lastCompletedIndex + 2}`);
+                                startGeneration(smartLastIndex + 1);
+                                toast.info(`Resuming from pin ${smartLastIndex + 2}`);
                             }}
                             className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 transition-colors"
                         >
@@ -993,7 +1070,8 @@ export function GenerationController({
                             Clear
                         </button>
                     </div>
-                )}
+                );
+            })()}
 
             {/* Render Mode Selector - Only show when not processing */}
             {(status === 'pending' || status === 'failed' || status === 'completed' || status === 'paused') && (
@@ -1058,18 +1136,28 @@ export function GenerationController({
 
             {/* Action Buttons - Added relative/z-index to fix overlapping issues */}
             <div className="flex items-center gap-3 relative z-10">
-                {/* Start Button - only when idle */}
-                {(status === 'pending' || status === 'failed') && (
-                    <button
-                        onClick={() => {
-                            startGeneration(0);
-                        }}
-                        className="flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors shadow-sm active:scale-95"
-                    >
-                        <Play className="w-5 h-5" />
-                        Start Generation
-                    </button>
-                )}
+                {/* Start Button - only when idle AND no resume available */}
+                {/* Start/Resume Button - Handles both fresh start and DB resume (when local storage is empty) */}
+                {(status === 'pending' || status === 'failed') && !canResume && (() => {
+                    const dbStartIndex = generatedCount ? generatedCount : 0;
+                    const sessionIndex = progress.current || 0;
+                    const startIndex = Math.max(dbStartIndex, sessionIndex);
+                    const isResuming = startIndex > 0;
+
+                    return (
+                        <button
+                            onClick={() => {
+                                startGeneration(startIndex);
+                            }}
+                            className={`flex items-center gap-2 px-6 py-3 text-white rounded-lg font-medium transition-colors shadow-sm active:scale-95 ${
+                                isResuming ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'
+                            }`}
+                        >
+                            <Play className="w-5 h-5" />
+                            {isResuming ? 'Resume Generation' : 'Start Generation'}
+                        </button>
+                    );
+                })()}
 
                 {/* Regenerate All Button */}
                 {(status === 'paused' || status === 'completed') && progress.current > 0 && (
