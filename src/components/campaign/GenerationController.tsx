@@ -593,10 +593,12 @@ export function GenerationController({
         log(`Starting BATCH generation in ${renderMode} mode from index ${startIndex}`);
 
         // BATCH_SIZE: Number of pins to render per batch iteration
-        const BATCH_SIZE = 50;
+        // Reduced to 5 to allow more frequent UI updates and prevent blocking
+        const BATCH_SIZE = 5;
         
         // CLIENT_PARALLEL_LIMIT: Number of concurrent renders
-        const CLIENT_PARALLEL_LIMIT = 4;
+        // Reduced to 2 to prevent saturating browser connection pool for image loading
+        const CLIENT_PARALLEL_LIMIT = 2;
 
         // Pre-warm canvas pool for batch processing
         canvasPoolRef.current.prewarm(CLIENT_PARALLEL_LIMIT, canvasSize.width, canvasSize.height);
