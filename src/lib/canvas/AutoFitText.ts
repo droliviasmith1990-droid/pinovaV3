@@ -91,8 +91,12 @@ export function calculateBestFitFontSize(
 
     // 2. Create temporary textbox for measurement
     // We clone properties carefully to ensure accurate measurement
+    // SAFETY BUFFER: Reduce available space slightly to prevent edge-case overflows due to sub-pixel rendering differences
+    const SAFETY_BUFFER_X = 2; // px
+    const SAFETY_BUFFER_Y = 2; // px
+
     const tempText = new TextboxClass(text, {
-        width: targetWidth,
+        width: Math.max(1, targetWidth - SAFETY_BUFFER_X), // Ensure wrapped slightly earlier
         fontFamily: config.fontFamily,
         fontWeight: config.fontWeight,
         fontStyle: config.fontStyle as 'normal' | 'italic',
@@ -120,8 +124,8 @@ export function calculateBestFitFontSize(
         
         const textHeight = tempText.height || 0;
         
-        // Hard Height Constraint
-        if (textHeight > targetHeight) {
+        // Hard Height Constraint (with safety buffer)
+        if (textHeight > Math.max(1, targetHeight - SAFETY_BUFFER_Y)) {
             return false;
         }
         
