@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, memo } from 'react';
-import { Download, Eye, Link2, Check, AlertCircle, Loader2, Trash2, RotateCw } from 'lucide-react';
+import { Download, Eye, Link2, Check, AlertCircle, Loader2, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { SelectionCheckbox } from '@/components/ui/BulkActions';
@@ -22,7 +22,6 @@ interface PinCardProps {
     showSelection?: boolean;
     onPreview?: (pin: PinCardData) => void;
     onDelete?: (pin: PinCardData) => void;
-    onRegenerate?: (pin: PinCardData) => void;
 }
 
 export const PinCard = memo(function PinCard({
@@ -32,11 +31,9 @@ export const PinCard = memo(function PinCard({
     showSelection = false,
     onPreview,
     onDelete,
-    onRegenerate,
 }: PinCardProps) {
     const [isCopied, setIsCopied] = useState(false);
     const [isDownloading, setIsDownloading] = useState(false);
-    const [isRegenerating, setIsRegenerating] = useState(false);
 
     // Helper to check if pin is successfully generated
     const isSuccess = pin.status === 'completed' || pin.status === 'generated';
@@ -88,18 +85,6 @@ export const PinCard = memo(function PinCard({
         e.stopPropagation();
         if (onDelete) {
             onDelete(pin);
-        }
-    };
-
-    const handleRegenerate = async (e: React.MouseEvent) => {
-        e.stopPropagation();
-        if (onRegenerate) {
-            setIsRegenerating(true);
-            try {
-                await onRegenerate(pin);
-            } finally {
-                setIsRegenerating(false);
-            }
         }
     };
 
@@ -171,22 +156,7 @@ export const PinCard = memo(function PinCard({
                     <div className="w-full h-full flex flex-col items-center justify-center bg-red-50 p-4">
                         <AlertCircle className="w-10 h-10 text-red-400 mb-2" />
                         <p className="text-sm text-red-600 text-center font-medium">Generation Failed</p>
-                        <p className="text-xs text-red-500 text-center mt-1 mb-3 max-w-[180px] break-words">{pin.errorMessage || 'Unknown error'}</p>
-                        
-                        {onRegenerate && (
-                            <button
-                                onClick={handleRegenerate}
-                                disabled={isRegenerating}
-                                className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-red-200 text-red-600 rounded-lg text-xs font-medium hover:bg-red-50 transition-colors shadow-sm"
-                            >
-                                {isRegenerating ? (
-                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                ) : (
-                                    <RotateCw className="w-3.5 h-3.5" />
-                                )}
-                                {isRegenerating ? 'Retrying...' : 'Regenerate'}
-                            </button>
-                        )}
+                        <p className="text-xs text-red-500 text-center mt-1">{pin.errorMessage || 'Unknown error'}</p>
                     </div>
                 ) : (
                     <div className="w-full h-full flex items-center justify-center bg-gray-100">
@@ -279,7 +249,6 @@ interface PinsGridProps {
     showSelection?: boolean;
     onPreview?: (pin: PinCardData) => void;
     onDeletePin?: (pin: PinCardData) => void;
-    onRegeneratePin?: (pin: PinCardData) => void;
 }
 
 export function PinsGrid({
@@ -289,7 +258,6 @@ export function PinsGrid({
     showSelection = false,
     onPreview,
     onDeletePin,
-    onRegeneratePin,
 }: PinsGridProps) {
     if (pins.length === 0) {
         return (
@@ -314,7 +282,6 @@ export function PinsGrid({
                     showSelection={showSelection}
                     onPreview={onPreview}
                     onDelete={onDeletePin}
-                    onRegenerate={onRegeneratePin}
                 />
             ))}
         </div>

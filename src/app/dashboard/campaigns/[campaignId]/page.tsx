@@ -21,10 +21,7 @@ import { ExportToolbar } from '@/components/campaign/ExportToolbar';
 import { CampaignDetailsPanel } from '@/components/campaign/CampaignDetailsPanel';
 import { SelectionActionBar, DeleteConfirmationModal } from '@/components/ui/BulkActions';
 import { Element, CanvasSize } from '@/types/editor';
-import { renderTemplate, FieldMapping } from '@/lib/fabric/engine';
-import { exportToBlob } from '@/lib/fabric/export';
 import { toast } from 'sonner';
-import * as fabric from 'fabric';
 
 // Reusable Pagination Component
 interface PaginationControlsProps {
@@ -430,89 +427,14 @@ export default function CampaignDetailPage() {
         // 🚀 OPTIMIZATION: We rely on the API (server-side) to atomically update generated_pins count
         // via the incrementally saved batches. Doing it here causes double-writes and race conditions.
         // We only use this for UI updates if needed, but the parent GenerationController handles UI local state.
-        console.log('[Page] Progress Update:', progress); 
+        
+        // if (campaign && progress.current % 5 === 0) {
+        //     await updateCampaign(campaign.id, {
+        //         generated_pins: progress.current,
+        //         current_index: progress.current,
+        //     });
+        // }
     }, []);
-
-    // ============================================
-    // Regeneration Logic
-    // ============================================
-    const handleRegeneratePin = useCallback(async (pin: PinCardData) => {
-        if (!template || !pin.csvData || !campaign) {
-            toast.error('Missing template or data for regeneration');
-            return;
-        }
-
-        const toastId = toast.loading(`Regenerating Pin ${pin.rowIndex + 1}...`);
-
-        try {
-            // 1. Create a temporary canvas element
-            const canvasEl = document.createElement('canvas');
-            canvasEl.width = template.canvas_size.width;
-            canvasEl.height = template.canvas_size.height;
-
-            const canvas = new fabric.StaticCanvas(canvasEl, {
-                width: template.canvas_size.width,
-                height: template.canvas_size.height,
-                backgroundColor: template.background_color,
-            });
-
-            // 2. Render the pin
-            await renderTemplate(
-                canvas,
-                template.elements,
-                { 
-                    width: template.canvas_size.width, 
-                    height: template.canvas_size.height, 
-                    backgroundColor: template.background_color 
-                },
-                pin.csvData as Record<string, string>,
-                campaign.field_mapping as unknown as FieldMapping
-            );
-
-            // 3. Export to Blob (JPEG 0.9)
-            const blob = await exportToBlob(canvas, { 
-                multiplier: 1, 
-                format: 'jpeg', 
-                quality: 0.9 
-            });
-
-            // 4. Upload
-            const formData = new FormData();
-            formData.append('file', blob, `pin-${pin.rowIndex + 1}.jpg`);
-            formData.append('campaign_id', campaignId);
-            formData.append('row_index', pin.rowIndex.toString());
-
-            const uploadResponse = await fetch('/api/upload-pin', {
-                method: 'POST',
-                body: formData,
-            });
-
-            if (!uploadResponse.ok) {
-                throw new Error('Upload failed');
-            }
-
-            const uploadResult = await uploadResponse.json();
-
-            // 5. Update State
-            handlePinGenerated({
-                id: pin.id,
-                rowIndex: pin.rowIndex,
-                imageUrl: uploadResult.url,
-                status: 'completed',
-                csvData: pin.csvData as Record<string, string>,
-            });
-
-            toast.success(`Pin ${pin.rowIndex + 1} regenerated!`, { id: toastId });
-            
-            // Clean up
-            canvas.dispose();
-
-        } catch (error) {
-            console.error('Regeneration failed:', error);
-            const msg = error instanceof Error ? error.message : 'Unknown error';
-            toast.error(`Regeneration failed: ${msg}`, { id: toastId });
-        }
-    }, [template, campaign, campaignId, handlePinGenerated]);
 
     // Handle status change
     const handleStatusChange = useCallback(async (status: string) => {
@@ -971,7 +893,6 @@ export default function CampaignDetailPage() {
                                             showSelection={selectedPinIds.size > 0}
                                             onPreview={handlePreview}
                                             onDeletePin={handleDeletePin}
-                                            onRegeneratePin={handleRegeneratePin}
                                         />
                                         
                                         {/* Pagination Controls - Below */}

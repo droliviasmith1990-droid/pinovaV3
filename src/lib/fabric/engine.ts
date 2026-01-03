@@ -60,35 +60,6 @@ export interface FieldMapping {
 
 // --- Helper Functions ---
 
-// --- Helper Functions ---
-
-/**
- * Retries a function with exponential backoff
- * @param fn Function to retry
- * @param retries Max retries (default 3)
- * @param delay Initial delay in ms (default 1000)
- * @param shouldRetry Optional predicate to determine if we should retry specific errors
- */
-async function retryWithBackoff<T>(
-    fn: () => Promise<T>, 
-    retries: number = 3, 
-    delay: number = 1000,
-    shouldRetry: (error: any) => boolean = () => true
-): Promise<T> {
-    try {
-        return await fn();
-    } catch (error) {
-        if (retries === 0 || !shouldRetry(error)) throw error;
-        
-        if (DEBUG_RENDER) {
-            console.log(`[Engine] Retry attempt ${4 - retries} of 3. Waiting ${delay}ms...`);
-        }
-        
-        await new Promise(resolve => setTimeout(resolve, delay));
-        return retryWithBackoff(fn, retries - 1, delay * 2, shouldRetry);
-    }
-}
-
 function createErrorPlaceholder(width: number = 200, height: number = 200): fabric.Group {
     const rect = new fabric.Rect({ width, height, fill: '#fee2e2', stroke: '#dc2626', strokeWidth: 3 });
     const text = new fabric.Text('⚠ Image Failed', {
@@ -199,42 +170,26 @@ async function loadImageToCanvas(url: string, options: Partial<fabric.ImageProps
         }
     }
 
-    // Retry logic wrapper
-    return retryWithBackoff(async () => {
-        // Browser Proxy Logic
-        // IMPORTANT: If URL is already a proxy URL or data URL, use it directly - no double-proxying!
-        if (url.startsWith('/api/proxy-image') || url.startsWith('data:')) {
-            try { return await tryLoad(url); }
-            catch (e) { throw e; } // Propagate for retry
-        }
-        
-        const knownCorsBlockedDomains = ['amazonaws.com', 'midjourney.com'];
-        const needsProxy = knownCorsBlockedDomains.some(d => url.includes(d));
-
-        if (needsProxy) {
-            try { return await tryLoad(`/api/proxy-image?url=${encodeURIComponent(url)}`); }
-            catch (e) { 
-                // If proxy fails, maybe try direct as last resort? 
-                // Unlikely to work if domain is known blocked, but worth a shot?
-                // For now, let's propagate to trigger retry
-                // But wait! If it's a 403, retry might not help unless it's transient.
-                throw e; 
-            }
-        }
-
+    // Browser Proxy Logic
+    // IMPORTANT: If URL is already a proxy URL or data URL, use it directly - no double-proxying!
+    if (url.startsWith('/api/proxy-image') || url.startsWith('data:')) {
         try { return await tryLoad(url); }
-        catch (e) {
-            // If direct load fails, try proxy
-             try { return await tryLoad(`/api/proxy-image?url=${encodeURIComponent(url)}`); }
-             catch (proxyError) { throw proxyError; }
-        }
-    }, 3, 1000, (error) => {
-        // Don't retry 404s
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const err = error as any;
-        if (err.message && err.message.includes('404')) return false;
-        return true;
-    });
+        catch { return createErrorPlaceholder(options.width as number, options.height as number); }
+    }
+    
+    const knownCorsBlockedDomains = ['amazonaws.com'];
+    const needsProxy = knownCorsBlockedDomains.some(d => url.includes(d));
+
+    if (needsProxy) {
+        try { return await tryLoad(`/api/proxy-image?url=${encodeURIComponent(url)}`); }
+        catch { /* Retry direct below */ }
+    }
+
+    try { return await tryLoad(url); }
+    catch {
+        try { return await tryLoad(`/api/proxy-image?url=${encodeURIComponent(url)}`); }
+        catch { return createErrorPlaceholder(options.width as number, options.height as number); }
+    }
 }
 
 function replaceDynamicFields(text: string, rowData: Record<string, string>, fieldMapping: FieldMapping): string {
@@ -500,8 +455,7 @@ async function createFabricObject(
     config: RenderConfig,
     rowData: Record<string, string>,
     fieldMapping: FieldMapping,
-    imageCache?: Map<string, fabric.FabricImage>, // ← NEW: Optional cache for parallel loading
-    strictMode: boolean = false // ← NEW: If true, throws error instead of creating placeholder
+    imageCache?: Map<string, fabric.FabricImage> // ← NEW: Optional cache for parallel loading
 ): Promise<fabric.FabricObject | null> {
     if (!el.visible) return null;
 
@@ -623,27 +577,19 @@ async function createFabricObject(
                     fabricObject = img;
                     
                 } catch (error) {
-                    if (strictMode) {
-                        throw error;
-                    }
-                    
                     // Image load failed - create placeholder
                     console.error(`[Render] Failed to load image ${imageEl.name}:`, error);
                     fabricObject = new fabric.Rect({
-                         ...commonOptions, 
-                         width: imageEl.width || 200, 
-                         height: imageEl.height || 200,
-                         fill: '#fee2e2', 
-                         stroke: '#dc2626', 
-                         strokeWidth: 2
-                     });
+                        ...commonOptions, 
+                        width: imageEl.width || 200, 
+                        height: imageEl.height || 200,
+                        fill: '#fee2e2', 
+                        stroke: '#dc2626', 
+                        strokeWidth: 2
+                    });
                 }
             } else {
-                // No URL - create placeholder or throw
-                if (strictMode) {
-                     throw new Error(`Image element "${imageEl.name}" has no URL source.`);
-                }
-
+                // No URL - create placeholder
                 if (DEBUG_RENDER) {
                     console.warn(`[Render] No URL for image ${imageEl.name}, creating placeholder`);
                 }
@@ -808,8 +754,7 @@ export async function renderTemplate(
         }
         
         // Pass imageCache to createFabricObject for parallel loading optimization
-        // Pass imageCache to createFabricObject for parallel loading optimization
-        const fabricObj = await createFabricObject(el, config, rowData, fieldMapping, imageCache, true); // Strict Mode ON for Batch
+        const fabricObj = await createFabricObject(el, config, rowData, fieldMapping, imageCache);
         
         if (fabricObj) {
             if (DEBUG_RENDER) {
