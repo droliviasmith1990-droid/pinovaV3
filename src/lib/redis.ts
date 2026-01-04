@@ -322,7 +322,7 @@ export async function acquireLock(
         const value = `${Date.now()}:${Math.random()}`;
         
         // ioredis SET NX EX
-        const result = await redis.set(key, value, 'NX', 'EX', ttlSeconds);
+        const result = await redis.set(key, value, 'EX', ttlSeconds, 'NX');
         
         return result === 'OK';
     } catch (error) {
