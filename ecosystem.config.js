@@ -3,7 +3,7 @@ module.exports = {
     {
       name: 'pinterest-app',
       script: 'npm',
-      args: 'start',
+      args: 'start -- -H 0.0.0.0',
       instances: 1,
       autorestart: true,
       watch: false,
