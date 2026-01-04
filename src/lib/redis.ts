@@ -86,6 +86,11 @@ export async function cacheGet<T>(
         
         return fresh;
     } catch (error) {
+        // Handle connection refused (common during build or local dev without redis)
+        if ((error as any)?.code === 'ECONNREFUSED' || (error as any)?.message?.includes('ECONNREFUSED')) {
+            console.warn(`[Cache] Redis unavailable (ECONNREFUSED), skipping cache for ${key}`);
+            return fallback();
+        }
         console.error(`[Cache] Error for ${key}:`, error);
         return fallback();
     }
