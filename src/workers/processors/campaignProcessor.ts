@@ -8,6 +8,19 @@ import { incrementProgress } from "@/lib/redis";
 import { CampaignJobData } from '@/lib/queue';
 
 // Initialize S3 Client for Tebi
+interface CachedCampaignData {
+    timestamp: number;
+    elements: Element[];
+    canvasSize: { width: number; height: number };
+    backgroundColor: string;
+    csvRows: Record<string, string>[];
+    fieldMapping: Record<string, string>;
+}
+
+declare global {
+    var campaignCache: Map<string, CachedCampaignData>;
+}
+
 const getS3Client = () => {
     // Handle TEBI_ENDPOINT with or without https:// prefix
     const rawEndpoint = process.env.TEBI_ENDPOINT || '';
@@ -55,15 +68,18 @@ async function uploadToS3(
 }
 
 export async function processCampaignBatch(jobData: CampaignJobData) {
-    let {
+    const {
         campaignId,
+        startIndex = 0,
+        batchSize,
+    } = jobData;
+
+    let {
         elements,
         canvasSize,
         backgroundColor,
         fieldMapping,
         csvRows,
-        startIndex = 0,
-        batchSize,
     } = jobData;
 
     console.log(`[Worker] Starting batch ${startIndex} for campaign ${campaignId}`);
@@ -76,7 +92,37 @@ export async function processCampaignBatch(jobData: CampaignJobData) {
     const supabase = createServiceRoleClient();
     
     // 1. Fetch Campaign and Template Data if missing
-    if (!elements || !canvasSize || !csvRows || !fieldMapping) {
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // OPTIMIZATION: InMemory Cache for Campaign Data
+    // Reduces DB I/O from 1 fetch/batch to 1 fetch/worker/30min
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    // Simple top-level cache (module scope)
+    // Note: This persists as long as the worker process is alive
+    if (!global.campaignCache) global.campaignCache = new Map();
+    
+    // MEMORY SAFETY: Prevent indefinite growth
+    // If cache gets too big (e.g. > 20 campaigns), clear it to free memory.
+    // This is a crude but effective LRU strategy for this specific use case.
+    if (global.campaignCache.size > 20) {
+        console.log('[Worker] Cache limit reached, purging in-memory campaign cache');
+        global.campaignCache.clear();
+    }
+    
+    const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+    const cached = global.campaignCache.get(campaignId);
+    let usedCache = false;
+
+    if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
+        if (!elements) elements = cached.elements;
+        if (!canvasSize) canvasSize = cached.canvasSize;
+        if (!backgroundColor) backgroundColor = cached.backgroundColor;
+        if (!csvRows) csvRows = cached.csvRows;
+        if (!fieldMapping) fieldMapping = cached.fieldMapping;
+        usedCache = true;
+    }
+
+    if ((!elements || !canvasSize || !csvRows || !fieldMapping) && !usedCache) {
             const { data: campaign, error: campaignError } = await supabase
             .from('campaigns')
             .select(`
@@ -99,10 +145,10 @@ export async function processCampaignBatch(jobData: CampaignJobData) {
         }
 
         // Fill in missing data from DB
-        if (!csvRows) csvRows = campaign.csv_data as Record<string, string>[];
+        let fetchedCsvRows = csvRows || (campaign.csv_data as Record<string, string>[]);
         
         // Download CSV if URL is present (and rows are empty)
-        if ((!csvRows || csvRows.length === 0) && (campaign as any).csv_url) {
+        if ((!fetchedCsvRows || fetchedCsvRows.length === 0) && (campaign as any).csv_url) {
             try {
                 const csvUrl = (campaign as any).csv_url;
                 console.log(`[Worker] Downloading CSV from ${csvUrl}`);
@@ -111,8 +157,8 @@ export async function processCampaignBatch(jobData: CampaignJobData) {
                     const csvText = await response.text();
                     const parseResult = Papa.parse(csvText, { header: true, skipEmptyLines: true });
                     if (parseResult.data && parseResult.data.length > 0) {
-                        csvRows = parseResult.data as Record<string, string>[];
-                        console.log(`[Worker] Downloaded and parsed ${csvRows.length} rows`);
+                        fetchedCsvRows = parseResult.data as Record<string, string>[];
+                        console.log(`[Worker] Downloaded and parsed ${fetchedCsvRows.length} rows`);
                     }
                 } else {
                         console.error(`[Worker] Failed to download CSV: ${response.status} ${response.statusText}`);
@@ -121,15 +167,8 @@ export async function processCampaignBatch(jobData: CampaignJobData) {
                 console.error('[Worker] Error fetching/parsing CSV:', e);
             }
         }
-
-        // Apply batch slicing if batchSize is set
-        if (batchSize && csvRows && csvRows.length > 0) {
-            const safeStartIndex = Math.max(0, Math.min(startIndex, csvRows.length));
-            const endIndex = Math.min(safeStartIndex + batchSize, csvRows.length);
-            
-            console.log(`[Worker] Batching: Slicing rows ${safeStartIndex} to ${endIndex} (Total: ${csvRows.length})`);
-            csvRows = csvRows.slice(safeStartIndex, endIndex);
-        }
+        
+        csvRows = fetchedCsvRows;
 
         if (!fieldMapping) fieldMapping = campaign.field_mapping as Record<string, string>;
         
@@ -143,6 +182,29 @@ export async function processCampaignBatch(jobData: CampaignJobData) {
         } else {
                 throw new Error("Template linked to campaign not found");
         }
+
+        // Update Cache
+        if (elements && canvasSize && csvRows && fieldMapping) {
+            global.campaignCache.set(campaignId, {
+                timestamp: Date.now(),
+                elements,
+                canvasSize,
+                backgroundColor: backgroundColor || '#ffffff',
+                csvRows,
+                fieldMapping
+            });
+            console.log(`[Worker] Cached campaign data for ${campaignId} (${csvRows.length} rows)`);
+        }
+    }
+
+    // Apply batch slicing if batchSize is set (Works for both Cached and Fetched data)
+    if (batchSize && csvRows && csvRows.length > 0) {
+        const safeStartIndex = Math.max(0, Math.min(startIndex, csvRows.length));
+        const endIndex = Math.min(safeStartIndex + batchSize, csvRows.length);
+        
+        // Don't log on every batch to save noise, unless debug
+        // console.log(`[Worker] Batching: Slicing rows ${safeStartIndex} to ${endIndex}`);
+        csvRows = csvRows.slice(safeStartIndex, endIndex);
     }
 
     // Re-validate after fetching
@@ -318,15 +380,23 @@ export async function processCampaignBatch(jobData: CampaignJobData) {
             const chunkResults = await Promise.all(chunkPromises);
             batchResults.push(...chunkResults);
             
-            // Update real-time progress in Redis
-            try {
-                const successCount = chunkResults.filter(r => r.success).length;
-                const failCount = chunkResults.filter(r => !r.success).length;
-                if (successCount > 0) await incrementProgress(campaignId, 'completed', successCount);
-                if (failCount > 0) await incrementProgress(campaignId, 'failed', failCount);
-            } catch (redisError) {
-                console.warn(`[Worker] Redis progress update failed, continuing:`, redisError);
-            }
+            // Accumulate ONLY local stats, do NOT hit Redis here
+            // We will do ONE big update at the end of the batch
+        }
+
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // OPTIMIZATION: Single Redis Update per Batch
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // Previously we updated every 2 pins (25 times per batch).
+        // Now we update ONCE per 50 pins. (96% Reduction in Redis commands)
+        const totalSuccess = batchResults.filter(r => r.success).length;
+        const totalFailed = batchResults.filter(r => !r.success).length;
+
+        try {
+            if (totalSuccess > 0) await incrementProgress(campaignId, 'completed', totalSuccess);
+            if (totalFailed > 0) await incrementProgress(campaignId, 'failed', totalFailed);
+        } catch (redisError) {
+             console.warn(`[Worker] Redis progress update failed:`, redisError);
         }
     } finally {
         canvasPool.cleanup();

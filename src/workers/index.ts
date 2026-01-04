@@ -20,14 +20,19 @@ const worker = new Worker('campaign-generation', async (job) => {
   try {
     const result = await processCampaignBatch(job.data);
     return result;
-  } catch (err: any) {
-    console.error(`[Job ${job.id}] Failed:`, err);
-    throw err;
+  } catch (err) {
+    const error = err as Error;
+    console.error(`[Job ${job.id}] Failed:`, error);
+    throw error;
   }
 }, { 
   connection, 
   concurrency: 1, // 1 batch per process (3 processes total = 3 concurrent batches)
   lockDuration: 300000, // 5 minutes lock
+  // OPTIMIZATION: Reduce Redis chatter
+  // Check for stalled jobs every 2 minutes instead of 30 seconds
+  stalledInterval: 120000, 
+  // Max retries per job is handled in queue.add, but fail immediately if processing fails to avoid zombie loops
 });
 
 worker.on('completed', job => {
