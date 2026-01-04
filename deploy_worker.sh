@@ -35,20 +35,26 @@ fi
 
 # 5. Start/Restart Worker (Optimized)
 echo "⚙️  Checking Worker..."
-# Improvements:
-# - Instances 1: BullMQ handles concurrency internally
-# - Memory 1500M: Restart if leaks occur (safety for 8GB VPS)
-if pm2 list | grep -q "pinterest-worker"; then
-    echo "Restarting worker..."
-    pm2 restart pinterest-worker
-else
-    echo "Starting new worker..."
-    pm2 start src/workers/index.ts \
-        --name "pinterest-worker" \
-        --interpreter ./node_modules/.bin/tsx \
-        --instances 1 \
-        --max-memory-restart 1500M
+
+# Resolve Interpreter Path (Global or Local)
+INTERPRETER=$(which tsx)
+if [ -z "$INTERPRETER" ]; then
+    INTERPRETER="./node_modules/.bin/tsx"
 fi
+echo "Using interpreter: $INTERPRETER"
+
+# Delete existing to force config update (interpreter change)
+if pm2 list | grep -q "pinterest-worker"; then
+    echo "Updating existing worker..."
+    pm2 delete pinterest-worker
+fi
+
+echo "Starting worker..."
+pm2 start src/workers/index.ts \
+    --name "pinterest-worker" \
+    --interpreter "$INTERPRETER" \
+    --instances 1 \
+    --max-memory-restart 1500M
 
 # 6. Save PM2 list
 echo "💾 Saving PM2 configuration..."
