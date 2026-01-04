@@ -35,7 +35,7 @@ worker.on('completed', job => {
 });
 
 worker.on('failed', (job, err) => {
-    console.error(`[Job ${job.id}] Failed with error: ${err.message}`);
+    console.error(`[Job ${job?.id}] Failed with error: ${err.message}`);
 });
 
 // Graceful shutdown
