@@ -22,7 +22,7 @@ jobs:
             set -e
 
             echo "🚀 Starting Deployment..."
-            cd /root/pinterest-editor-fabric
+            cd /root/pinterest-editor
 
             echo "📥 Pulling latest code..."
             git pull origin main
