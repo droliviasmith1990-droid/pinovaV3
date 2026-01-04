@@ -647,16 +647,13 @@ export function GenerationController({
                  try {
                     console.log(`[Server Mode] Sending batch job to server...`);
                     
-                    const response = await fetch('/api/render-batch', {
+                    const response = await fetch('/api/queue/start-generation', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             campaignId,
-                            elements: templateElements,
-                            canvasSize,
-                            backgroundColor,
-                            fieldMapping,
-                            csvRows: csvData.slice(startIndex), // Send all remaining rows
+                            // elements, canvasSize, etc. are fetched by the worker from DB
+                            csvRows: csvData.slice(startIndex), // Send all remaining rows (for count & data)
                             startIndex: startIndex,
                         }),
                     });
