@@ -22,9 +22,12 @@ export {
     // Filter Operations
     getTemplatesFiltered,
     getTemplatesWithElements,
-    getPublicTemplates,
+
     // Metadata Operations
     updateTemplateMetadata,
     checkTemplateNameExists,
 } from '../templates';
+
+// Export cached functions (Server Only)
+export { getPublicTemplates } from '../templates-cached';
 

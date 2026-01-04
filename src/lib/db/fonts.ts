@@ -1,6 +1,6 @@
 import { supabase } from '../supabase';
 import { getCurrentUserId } from '../supabase';
-import { cacheGet, cacheInvalidate } from '../redis';
+
 
 // ============================================
 // Types
@@ -105,8 +105,7 @@ export async function uploadFont(
         return null;
     }
 
-    // Invalidate cache after adding font
-    await cacheInvalidate(`fonts:${userId}`);
+
 
     return data;
 }
@@ -119,8 +118,7 @@ export async function getFonts(): Promise<Font[]> {
     const userId = await getCurrentUserId();
     if (!userId) return [];
 
-    // Cache fonts for 1 hour per user
-    return cacheGet(`fonts:${userId}`, async () => {
+    try {
         const { data, error } = await supabase
             .from('custom_fonts')
             .select('*')
@@ -133,7 +131,10 @@ export async function getFonts(): Promise<Font[]> {
         }
 
         return data || [];
-    }, 3600); // 1 hour
+    } catch (error) {
+        console.error('Error fetching fonts:', error);
+        return [];
+    }
 }
 
 /**
@@ -198,8 +199,7 @@ export async function deleteFont(fontId: string): Promise<boolean> {
         return false;
     }
 
-    // Invalidate cache after deleting font
-    await cacheInvalidate(`fonts:${userId}`);
+
 
     return true;
 }
