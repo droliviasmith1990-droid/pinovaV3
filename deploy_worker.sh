@@ -23,15 +23,8 @@ npm install -g pm2 typescript tsx
 echo "📚 Installing project dependencies..."
 npm install --production --no-audit
 
-# 4. Start/Restart Next.js App
-echo "🌐 Checking Next.js App..."
-if pm2 list | grep -q "pinterest-app"; then
-    echo "Restarting app..."
-    pm2 restart pinterest-app
-else
-    echo "Starting app..."
-    pm2 start npm --name "pinterest-app" -- start
-fi
+# 4. (Skipped) Next.js App is hosted on Vercel
+echo "ℹ️  Next.js App logic skipped (Worker Only Mode)"
 
 # 5. Start/Restart Worker (Optimized)
 echo "⚙️  Checking Worker..."
