@@ -26,7 +26,7 @@ const worker = new Worker('campaign-generation', async (job) => {
   }
 }, { 
   connection, 
-  concurrency: 2, // Safe concurrency for 4-core VPS (allows 2 batches of parallel rendering)
+  concurrency: 1, // 1 batch per process (3 processes total = 3 concurrent batches)
   lockDuration: 300000, // 5 minutes lock
 });
 

@@ -197,8 +197,9 @@ export async function processCampaignBatch(jobData: CampaignJobData) {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // PHASE 1: Create canvas pool
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // VPS has 4 cores, we can be aggressive but safe
-    const PARALLEL_LIMIT = 4; // Use all 4 cores effectively
+    // With 3 PM2 workers, 2 parallel tasks per worker = 6 total concurrent tasks
+    // This effectively saturates 4 vCPUs without thrashing
+    const PARALLEL_LIMIT = 2; 
     const canvasPool = new CanvasPool({
         maxSize: PARALLEL_LIMIT,
         defaultWidth: canvasSize!.width,
