@@ -46,7 +46,7 @@ echo "Starting worker..."
 pm2 start src/workers/index.ts \
     --name "pinterest-worker" \
     --interpreter "$INTERPRETER" \
-    --instances 3 \
+    --instances 4 \
     --max-memory-restart 1500M
 
 # 6. Save PM2 list
