@@ -178,7 +178,7 @@ export interface CampaignProgress {
     total: number;
     completed: number;
     failed: number;
-    status: 'pending' | 'processing' | 'completed' | 'failed';
+    status: 'pending' | 'queueing' | 'processing' | 'completed' | 'failed';
     startedAt?: string;
     completedAt?: string;
     errors?: string[];
@@ -280,31 +280,36 @@ export async function incrementProgress(
     try {
         const key = `progress:${campaignId}`;
         
-        // Use HINCRBY for atomic increment on the hash field
+        // Use HINCRBY for atomic increment
         await redis.hincrby(key, field, amount);
         
-        // Get the full progress state to check for completion
-        const [total, completed, failed] = await Promise.all([
-            redis.hget<number>(key, 'total'),
-            redis.hget<number>(key, 'completed'),
-            redis.hget<number>(key, 'failed'),
-        ]);
+        // OPTIMIZATION: Use HGETALL to fetch status in ONE command instead of 3
+        const data = await redis.hgetall(key);
         
-        const totalNum = total || 0;
-        const completedNum = completed || 0;
-        const failedNum = failed || 0;
+        if (!data || Object.keys(data).length === 0) return;
+
+        const totalNum = Number(data.total) || 0;
+        const completedNum = Number(data.completed) || 0;
+        const failedNum = Number(data.failed) || 0;
         
-        // Auto-complete if all done
+        // Auto-complete if all done (and not already marked)
         if (totalNum > 0 && (completedNum + failedNum >= totalNum)) {
-            const newStatus = failedNum > 0 ? 'failed' : 'completed';
-            await redis.hset(key, { 
-                status: newStatus, 
-                completedAt: new Date().toISOString() 
-            });
+            const currentStatus = data.status as string;
+            if (currentStatus !== 'completed' && currentStatus !== 'failed') {
+                 const newStatus = failedNum > 0 ? 'failed' : 'completed';
+                 await redis.hset(key, { 
+                     status: newStatus, 
+                     completedAt: new Date().toISOString() 
+                 });
+            }
         }
         
-        // Ensure TTL is set (24 hours)
-        await redis.expire(key, 86400);
+        // Ensure TTL is set (24 hours) - only if we suspect it's missing (optimize: skip often?)
+        // Actually, expire is cheap, but let's do it only on completion or start to save ops?
+        // Let's keep it for safety, but maybe we can depend on setProgress doing it.
+        // For now, removing the explicit expire on EVERY increment to save 1 command per update.
+        // It was set in setProgress initially.
+        // await redis.expire(key, 86400); 
         
     } catch (error) {
         // Log but don't throw - progress tracking is non-critical

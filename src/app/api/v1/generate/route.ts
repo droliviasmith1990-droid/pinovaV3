@@ -1,21 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { StaticCanvas } from 'fabric/node';
-import { v4 as uuidv4 } from 'uuid';
-import { Element } from '@/types/editor';
-import { renderTemplateServer, RenderConfig, FieldMapping, loadCustomFontsForTemplate } from '@/lib/fabric/serverEngine';
 import { createServiceRoleClient } from '@/lib/supabaseServer';
 import { validateApiKey } from '@/lib/db/apiKeys';
 import { getTemplateByShortId } from '@/lib/db/templates';
-import { uploadToS3, isTebiConfigured } from '@/lib/s3';
+import { addCampaignJob } from '@/lib/queue';
+import { setProgress } from '@/lib/redis';
 
 // Vercel Serverless Config
-export const maxDuration = 60; // Allow up to 60s for batch processing
+export const maxDuration = 30; // Fast response
 export const dynamic = 'force-dynamic';
-
-// Constants
-const MAX_ROWS_PER_REQUEST = 50;
-const DEFAULT_MULTIPLIER = 1; // 1x for original canvas size (use 2 for high quality)
-const PARALLEL_BATCH_SIZE = 5; // Process 5 rows in parallel for speed
 
 // Error codes
 type ErrorCode = 'INVALID_API_KEY' | 'TEMPLATE_NOT_FOUND' | 'VALIDATION_ERROR' | 'RATE_LIMIT' | 'SERVER_ERROR';
@@ -26,30 +18,18 @@ interface GenerateRequest {
     rows: Record<string, string>[];
     field_mapping?: Record<string, string>;
     multiplier?: number;
+    campaign_name?: string; // Optional name for the campaign
 }
 
-interface GeneratedResult {
-    row_index: number;
-    url: string;
-    status: 'success';
-}
-
-interface FailedResult {
-    row_index: number;
-    error: string;
-    status: 'error';
-}
-
-interface GenerateResponse {
+interface AsyncGenerateResponse {
     success: true;
-    generated: GeneratedResult[];
-    failed: FailedResult[];
+    campaign_id: string;
+    status: 'queued';
+    message: string;
+    status_url: string;
     meta: {
-        template_id: string;
-        total_requested: number;
-        successful: number;
-        failed: number;
-        processing_time_ms: number;
+        total_rows: number;
+        estimated_time_seconds: number;
     };
 }
 
@@ -61,21 +41,16 @@ interface ErrorResponse {
 
 /**
  * Extract API key from request headers
- * Supports: Authorization: Bearer pingen_xxx OR X-API-Key: pingen_xxx
  */
 function extractApiKey(request: NextRequest): string | null {
-    // Try Authorization header first (Bearer token)
     const authHeader = request.headers.get('Authorization');
     if (authHeader?.startsWith('Bearer ')) {
         return authHeader.substring(7);
     }
-
-    // Try X-API-Key header
     const apiKeyHeader = request.headers.get('X-API-Key');
     if (apiKeyHeader) {
         return apiKeyHeader;
     }
-
     return null;
 }
 
@@ -87,94 +62,10 @@ function errorResponse(error: string, code: ErrorCode, status: number): NextResp
 }
 
 /**
- * Render a single pin and upload to storage
- */
-async function renderAndUploadPin(
-    elements: Element[],
-    canvasSize: { width: number; height: number },
-    backgroundColor: string,
-    rowData: Record<string, string>,
-    fieldMapping: FieldMapping,
-    userId: string,
-    multiplier: number,
-    supabase: ReturnType<typeof createServiceRoleClient> // Reuse client for performance
-): Promise<{ url: string }> {
-
-    // Initialize Headless Canvas using fabric/node for server-side rendering
-    const canvas = new StaticCanvas(undefined, {
-        width: canvasSize.width,
-        height: canvasSize.height,
-    });
-
-    try {
-        // Render using shared engine
-        const config: RenderConfig = {
-            width: canvasSize.width,
-            height: canvasSize.height,
-            backgroundColor,
-        };
-
-        await renderTemplateServer(canvas, elements, config, rowData, fieldMapping);
-
-        // Export to data URL - JPEG 0.7 quality for speed and smaller files
-        const dataUrl = canvas.toDataURL({
-            format: 'jpeg',
-            quality: 0.7,
-            multiplier,
-        });
-
-        // Prepare buffer for upload
-        const base64Data = dataUrl.replace(/^data:image\/\w+;base64,/, '');
-        const buffer = Buffer.from(base64Data, 'base64');
-
-        // Upload to Tebi S3 Storage (preferred) or fall back to Supabase
-        const timestamp = Date.now();
-        const fileName = `pins/${userId}/${timestamp}_${uuidv4()}.jpg`;
-
-        if (isTebiConfigured()) {
-            // Use Tebi S3
-            const publicUrl = await uploadToS3(fileName, buffer, 'image/jpeg');
-            if (publicUrl) {
-                console.log(`[API] Uploaded to Tebi S3: ${publicUrl}`);
-                return { url: publicUrl };
-            }
-            // Fall through to Supabase if Tebi fails
-            console.warn('[API] Tebi upload failed, falling back to Supabase');
-        }
-
-        // Fallback: Upload to Supabase Storage
-        const bucketName = 'generated_pins';
-        const { error: uploadError } = await supabase.storage
-            .from(bucketName)
-            .upload(fileName, buffer, {
-                contentType: 'image/jpeg',
-                upsert: false,
-            });
-
-        if (uploadError) {
-            throw new Error(`Upload failed: ${uploadError.message}`);
-        }
-
-        // Get public URL from Supabase
-        const { data: { publicUrl } } = supabase.storage
-            .from(bucketName)
-            .getPublicUrl(fileName);
-
-        console.log(`[API] Uploaded to Supabase: ${publicUrl}`);
-        return { url: publicUrl };
-    } finally {
-        // Always cleanup canvas
-        canvas.dispose();
-    }
-}
-
-/**
  * POST /api/v1/generate
- * Generate Pinterest pins from a template with dynamic data
+ * Async Trigger: Accepts JSON, creates Campaign, Queues Job, Returns ID.
  */
-export async function POST(request: NextRequest): Promise<NextResponse<GenerateResponse | ErrorResponse>> {
-    const startTime = Date.now();
-
+export async function POST(request: NextRequest): Promise<NextResponse<AsyncGenerateResponse | ErrorResponse>> {
     try {
         // 1. Extract and validate API key
         const apiKey = extractApiKey(request);
@@ -206,7 +97,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<GenerateR
             return errorResponse('Invalid JSON body', 'VALIDATION_ERROR', 400);
         }
 
-        const { template_id, rows, field_mapping = {}, multiplier = DEFAULT_MULTIPLIER } = body;
+        const { template_id, rows, field_mapping = {}, campaign_name } = body;
 
         // Validate required fields
         if (!template_id) {
@@ -215,14 +106,6 @@ export async function POST(request: NextRequest): Promise<NextResponse<GenerateR
 
         if (!rows || !Array.isArray(rows) || rows.length === 0) {
             return errorResponse('rows must be a non-empty array', 'VALIDATION_ERROR', 400);
-        }
-
-        if (rows.length > MAX_ROWS_PER_REQUEST) {
-            return errorResponse(
-                `Maximum ${MAX_ROWS_PER_REQUEST} rows per request. You sent ${rows.length}.`,
-                'VALIDATION_ERROR',
-                400
-            );
         }
 
         // 4. Fetch template by short_id
@@ -235,70 +118,94 @@ export async function POST(request: NextRequest): Promise<NextResponse<GenerateR
             );
         }
 
-        // 5. Load custom fonts used in template (from Supabase)
-        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-        const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-        await loadCustomFontsForTemplate(template.elements, supabaseUrl, supabaseServiceKey);
+        // 5. Create Campaign in DB
+        // We store the CSV data immediately so the worker can fetch it
+        // This decouples the large payload from the queue logic
+        const campaignName = campaign_name || `API Import - ${new Date().toLocaleString()}`;
+        
+        const { data: campaign, error: createError } = await supabase
+            .from('campaigns')
+            .insert({
+                user_id: userId,
+                template_id: template.id,
+                name: campaignName,
+                status: 'queueing', // Initial status
+                total_pins: rows.length,
+                generated_pins: 0,
+                csv_data: rows, // Store full data in DB (JSONB)
+                field_mapping: field_mapping,
+            })
+            .select('id')
+            .single();
 
-        // 6. Process rows in parallel batches for speed
-        const generated: GeneratedResult[] = [];
-        const failed: FailedResult[] = [];
-
-        for (let i = 0; i < rows.length; i += PARALLEL_BATCH_SIZE) {
-            const batch = rows.slice(i, Math.min(i + PARALLEL_BATCH_SIZE, rows.length));
-            
-            // Process batch in parallel
-            const results = await Promise.allSettled(
-                batch.map(async (rowData, batchIndex) => {
-                    const rowIndex = i + batchIndex;
-                    const { url } = await renderAndUploadPin(
-                        template.elements,
-                        template.canvas_size,
-                        template.background_color,
-                        rowData,
-                        field_mapping,
-                        userId,
-                        multiplier,
-                        supabase // Pass shared client
-                    );
-                    return { rowIndex, url };
-                })
-            );
-
-            // Collect results
-            results.forEach((result, batchIndex) => {
-                const rowIndex = i + batchIndex;
-                if (result.status === 'fulfilled') {
-                    generated.push({
-                        row_index: rowIndex,
-                        url: result.value.url,
-                        status: 'success',
-                    });
-                } else {
-                    failed.push({
-                        row_index: rowIndex,
-                        error: result.reason?.message || 'Unknown error',
-                        status: 'error',
-                    });
-                }
-            });
+        if (createError || !campaign) {
+            console.error('[api/v1/generate] Failed to create campaign:', createError);
+            return errorResponse('Failed to create campaign record', 'SERVER_ERROR', 500);
         }
 
-        // 6. Return aggregated response
-        const processingTime = Date.now() - startTime;
+        const campaignId = campaign.id;
+
+        // 6. Initialize Redis Progress
+        await setProgress(campaignId, {
+            total: rows.length,
+            completed: 0,
+            failed: 0,
+            status: 'queueing',
+        });
+
+        // 7. Queue Jobs (Batching)
+        const BATCH_SIZE = 50;
+        const jobs = [];
+
+        for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+            // Push lightweight job: Worker will fetch heavy data from DB (via campaignId)
+            jobs.push(addCampaignJob({
+                campaignId,
+                startIndex: i,
+                batchSize: BATCH_SIZE,
+                // Do NOT send csvRows here - worker fetches from DB
+            }));
+        }
+
+        await Promise.all(jobs);
+
+        // Update status to 'processing' (or 'queued')
+        await supabase
+            .from('campaigns')
+            .update({ status: 'processing' }) // Mark as processing immediately or leave as queueing? 'processing' is safer for UI
+            .eq('id', campaignId);
+            
+        // Also update Redis status
+        await setProgress(campaignId, {
+            total: rows.length,
+            completed: 0,
+            failed: 0,
+            status: 'processing',
+        });
+
+        console.log(`[API/Async] Queued campaign ${campaignId} with ${rows.length} rows (${jobs.length} batches)`);
+
+        // 8. Return Async Response
+        // Estimate: 0.5s per pin / Concurrency 4 = ~0.125s per pin? Conservative: 1s per pin / 4 workers
+        // Let's say 400 pins/min = ~6.6 pins/sec.
+        const estimatedSeconds = Math.ceil(rows.length / 5); // Very rough estimate
+
+        const host = request.headers.get('host') || 'localhost:3000';
+        const protocol = host.includes('localhost') ? 'http' : 'https';
+        const statusUrl = `${protocol}://${host}/api/v1/generate/${campaignId}`;
 
         return NextResponse.json({
             success: true,
-            generated,
-            failed,
+            campaign_id: campaignId,
+            status: 'queued',
+            message: 'Campaign created and processing started.',
+            status_url: statusUrl,
             meta: {
-                template_id,
-                total_requested: rows.length,
-                successful: generated.length,
-                failed: failed.length,
-                processing_time_ms: processingTime,
+                total_rows: rows.length,
+                estimated_time_seconds: estimatedSeconds,
             },
         });
+
     } catch (error) {
         console.error('[api/v1/generate] Unexpected error:', error);
         const errorMessage = error instanceof Error ? error.message : 'Internal server error';
@@ -313,36 +220,19 @@ export async function GET(): Promise<NextResponse> {
     return NextResponse.json({
         endpoint: '/api/v1/generate',
         method: 'POST',
-        description: 'Generate Pinterest pins from a template with dynamic data',
+        description: 'Asynchronous generation of Pinterest pins. Returns a campaign ID to poll for status.',
         authentication: 'Bearer token or X-API-Key header',
         request_body: {
-            template_id: 'string (required) - Template short ID (e.g., TMPL-abc123xy)',
-            rows: 'array (required) - Array of data objects, max 50 per request',
+            template_id: 'string (required) - Template short ID',
+            rows: 'array (required) - Array of data objects',
             field_mapping: 'object (optional) - Maps template fields to row columns',
-            multiplier: 'number (optional) - Image resolution multiplier, default 2',
-        },
-        example_request: {
-            template_id: 'TMPL-abc123xy',
-            rows: [
-                { title: 'Product 1', price: '$9.99' },
-                { title: 'Product 2', price: '$19.99' },
-            ],
-            field_mapping: {
-                productName: 'title',
-                productPrice: 'price',
-            },
+            campaign_name: 'string (optional) - Name for the campaign',
         },
         response: {
             success: true,
-            generated: [{ row_index: 0, url: 'https://...', status: 'success' }],
-            failed: [],
-            meta: {
-                template_id: 'TMPL-abc123xy',
-                total_requested: 2,
-                successful: 2,
-                failed: 0,
-                processing_time_ms: 1234,
-            },
+            campaign_id: 'uuid',
+            status: 'queued',
+            status_url: 'https://.../api/v1/generate/{id}',
         },
     });
 }
