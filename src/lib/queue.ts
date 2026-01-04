@@ -6,8 +6,13 @@ import Redis from 'ioredis';
 const connectionStr = process.env.REDIS_URL || 'redis://localhost:6379';
 
 // Configure Redis connection
+// BullMQ requires maxRetriesPerRequest: null
+// Upstash requires 'tls' if the URL starts with rediss://
+// 'family: 0' ensures dual-stack support (IPv4/IPv6)
 const connection = new Redis(connectionStr, {
-  maxRetriesPerRequest: null, // Required by BullMQ
+  maxRetriesPerRequest: null,
+  family: 0, 
+  tls: connectionStr.startsWith('rediss://') ? { rejectUnauthorized: false } : undefined,
 });
 
 export const campaignQueue = new Queue('campaign-generation', { 
