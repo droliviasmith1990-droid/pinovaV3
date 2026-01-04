@@ -150,7 +150,7 @@ export function calculateBestFitFontSize(
         let iterations = 0;
         const baseSpacing = config.charSpacing || 0;
 
-        while (low <= high && iterations < 30) {
+        while (low <= high && iterations < 12) {
             const mid = Math.floor((low + high) / 2);
             
             if (checkFit(mid, baseSpacing, enforceMaxLines)) {

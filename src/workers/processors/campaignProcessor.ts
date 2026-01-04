@@ -210,7 +210,7 @@ export async function processCampaignBatch(jobData: CampaignJobData) {
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         // OPTIMIZATION: Pre-load unique images
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        const imageCache = new Map<string, string>();
+        const imageCache = new Map<string, string | Buffer>();
         const imageElements = preparedElements.filter(el => el.type === 'image' && el.visible);
         const uniqueUrls = new Set<string>();
         
@@ -252,9 +252,9 @@ export async function processCampaignBatch(jobData: CampaignJobData) {
                     
                     if (response.ok) {
                         const arrayBuffer = await response.arrayBuffer();
-                        const base64 = Buffer.from(arrayBuffer).toString('base64');
-                        const contentType = response.headers.get('content-type') || 'image/png';
-                        imageCache.set(url, `data:${contentType};base64,${base64}`);
+                        // OPTIMIZATION: Store RAW Buffer (Skip Base64 encode)
+                        const buffer = Buffer.from(arrayBuffer);
+                        imageCache.set(url, buffer);
                     }
                 } catch (e) {
                     console.warn(`[Worker] Image prefetch failed: ${url}`, e);
@@ -279,14 +279,11 @@ export async function processCampaignBatch(jobData: CampaignJobData) {
 
                 await renderTemplate(canvas, preparedElements, config, rowData, fieldMapping);
                 
-                const dataUrl = canvas.toDataURL({
-                    format: 'jpeg',
-                    quality: 0.80, 
-                    multiplier: 1,
-                });
-
-                const base64Data = dataUrl.replace(/^data:image\/\w+;base64,/, '');
-                return Buffer.from(base64Data, 'base64');
+                // OPTIMIZATION: Export directly to Buffer (skips Base64 encode/decode)
+                // fabric-node / node-canvas extension
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const buffer = (canvas.getElement() as any).toBuffer('image/jpeg', { quality: 0.80 });
+                return buffer;
             } finally {
                 canvasPool.release(canvas);
             }

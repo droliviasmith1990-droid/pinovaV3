@@ -10,8 +10,8 @@ const DEBUG_RENDER = process.env.NODE_ENV === 'development' || process.env.DEBUG
 // 🚀 SERVER-SIDE CACHES - Reuse fetched images across renders
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-// Level 1: URL → base64 data URL (set by route.ts before batch)
-let serverImageCache: Map<string, string> | null = null;
+// Level 1: URL → base64 data URL OR Buffer (set by route.ts before batch)
+let serverImageCache: Map<string, string | Buffer> | null = null;
 
 // Level 2: URL → FabricImage object (populated on first load, cloned for reuse)
 let fabricImageCache: Map<string, fabric.FabricImage> | null = null;
@@ -21,7 +21,7 @@ let fabricImageCache: Map<string, fabric.FabricImage> | null = null;
  * This is critical for concurrent batch rendering - each batch adds its images
  * without overwriting images cached by other concurrent batches.
  */
-export function setServerImageCache(cache: Map<string, string>): void {
+export function setServerImageCache(cache: Map<string, string | Buffer>): void {
     // Initialize caches if they don't exist
     if (!serverImageCache) {
         serverImageCache = new Map();
@@ -115,18 +115,31 @@ async function loadImageToCanvas(url: string, options: Partial<fabric.ImageProps
     // if (!isBrowser && fabricImageCache) { ... }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 🚀 LEVEL 1 CACHE: Data URL cache - create fresh FabricImage each time
+    // 🚀 LEVEL 1 CACHE: Data URL OR Buffer cache
     // This is slower than cloning but avoids race conditions
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if (!isBrowser && serverImageCache) {
-        const cachedDataUrl = serverImageCache.get(url);
-        if (cachedDataUrl) {
+        const cachedData = serverImageCache.get(url);
+        if (cachedData) {
             try {
-                const img = await tryLoad(cachedDataUrl);
+                // OPTIMIZATION: Handle Raw Buffer (Skip Base64)
+                if (typeof cachedData !== 'string') {
+                    // Assume it's a Buffer (node-canvas compatible)
+                    // We use the global.Image polyfill which accepts Buffer as src
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const img = new (global as any).Image();
+                    img.src = cachedData;
+                    
+                    const fabricImg = new fabric.FabricImage(img, { ...options });
+                    return fabricImg;
+                }
+                
+                // Fallback for Data URL strings
+                const img = await tryLoad(cachedData);
                 // NOTE: Not caching FabricImage to avoid parallel rendering race conditions
                 return img;
             } catch {
-                console.warn(`[Engine] Data URL cache load failed for: ${url.substring(0, 60)}`);
+                console.warn(`[Engine] Data URL/Buffer cache load failed for: ${url.substring(0, 60)}`);
             }
         } else {
             console.warn(`[Engine] Cache MISS for: ${url.substring(0, 80)}`);
@@ -300,35 +313,36 @@ function applyImageFitMode(
     }
     
   } else if (fitMode === 'cover') {
-    // COVER MODE: Scale uniformly to cover, then clip overflow
+    // COVER MODE: Scale uniformly to cover, then CROP (more efficient than clipPath)
+    // Calculating crop avoids rendering invisible pixels
     const scale = Math.max(targetWidth / naturalWidth, targetHeight / naturalHeight);
     
     const scaledWidth = naturalWidth * scale;
     const scaledHeight = naturalHeight * scale;
     
+    // Calculate centering offsets
     const offsetX = (scaledWidth - targetWidth) / 2;
     const offsetY = (scaledHeight - targetHeight) / 2;
     
     img.set({
-      left: imageEl.x - offsetX,
-      top: imageEl.y - offsetY,
+      left: imageEl.x,
+      top: imageEl.y,
       scaleX: scale,
       scaleY: scale,
       angle: imageEl.rotation || 0,
       opacity: imageEl.opacity ?? 1,
       originX: 'left',
       originY: 'top',
-      clipPath: new fabric.Rect({
-        left: imageEl.x,
-        top: imageEl.y,
-        width: targetWidth,
-        height: targetHeight,
-        absolutePositioned: true,
-      }),
+      // CRITICAL OPTIMIZATION: Use cropX/cropY instead of clipPath
+      // This tells the engine to only draw the visible source pixels
+      cropX: offsetX / scale,
+      cropY: offsetY / scale,
+      width: targetWidth / scale,
+      height: targetHeight / scale,
     });
     
     if (DEBUG_RENDER) {
-      console.log(`[Render] Applied COVER: scale=${scale.toFixed(3)}, offset=(${offsetX.toFixed(1)}, ${offsetY.toFixed(1)})`);
+      console.log(`[Render] Applied COVER (Optimized): scale=${scale.toFixed(3)}, crop=(${img.cropX?.toFixed(1)}, ${img.cropY?.toFixed(1)})`);
     }
     
   } else if (fitMode === 'contain') {
