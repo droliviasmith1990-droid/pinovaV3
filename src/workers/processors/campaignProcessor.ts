@@ -265,9 +265,28 @@ export async function processCampaignBatch(jobData: CampaignJobData) {
     }
     
     console.log(`[Worker] 🛠️ TEMPLATE ELEMENTS (${elements.length}):`);
+    
+    // Check for Header Mismatches
+    const csvHeaders = csvRows.length > 0 ? Object.keys(csvRows[0]) : [];
+    console.error(`[Worker] 🚨 CSV HEADERS AVAILABLE:`, JSON.stringify(csvHeaders));
+
     elements.forEach((el, idx) => {
         const isDynamic = (el as any).isDynamic;
         const dynamicSource = (el as any).dynamicSource || (el as any).dynamicField;
+        
+        if (isDynamic && dynamicSource) {
+            // Check if this source exists in CSV
+            const match = csvHeaders.find(h => h === dynamicSource) || 
+                          csvHeaders.find(h => h.toLowerCase() === dynamicSource.toLowerCase()) ||
+                          csvHeaders.find(h => h.trim() === dynamicSource.trim());
+            
+            if (!match) {
+                 console.error(`[Worker] ❌ MISMATCH: Element "${el.name}" expects "${dynamicSource}" but NOT FOUND in CSV headers.`);
+            } else {
+                 console.log(`[Worker] ✅ MATCH: Element "${el.name}" source "${dynamicSource}" maps to CSV column "${match}"`);
+            }
+        }
+
         const textContent = el.type === 'text' ? (el as any).text : 'N/A';
         console.log(`[Worker] El[${idx}] "${el.name}" (${el.type}): isDynamic=${isDynamic}, Source=${dynamicSource}, Text="${textContent.substring(0, 30)}"`);
         if (el.type === 'text' && textContent.includes('{{')) {

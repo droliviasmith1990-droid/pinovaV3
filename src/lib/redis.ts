@@ -1,4 +1,4 @@
-
+// Redis Client - Fixed to remove server-only dependency
 import Redis from 'ioredis';
 
 /**
