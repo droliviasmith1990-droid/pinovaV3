@@ -67,6 +67,7 @@ function errorResponse(error: string, code: ErrorCode, status: number): NextResp
  */
 export async function POST(request: NextRequest): Promise<NextResponse<AsyncGenerateResponse | ErrorResponse>> {
     try {
+        console.log('[API] POST /api/v1/generate received request');
         // 1. Extract and validate API key
         const apiKey = extractApiKey(request);
         if (!apiKey) {
