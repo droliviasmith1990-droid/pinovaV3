@@ -251,7 +251,7 @@ export async function processCampaignBatch(jobData: CampaignJobData) {
     
     const preparedElements = await prepareElementsForServerRendering(elements, supabaseUrl, supabaseKey);
 
-    console.log(`[Worker] Processing batch of ${csvRows.length} pins for campaign ${campaignId}`);
+    console.log(`[Worker] [DEBUG-ID-999] Processing batch of ${csvRows.length} pins for campaign ${campaignId}`);
 
     const s3Client = getS3Client();
     const batchResults: any[] = [];
