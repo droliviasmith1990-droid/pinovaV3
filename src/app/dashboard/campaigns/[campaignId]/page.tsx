@@ -7,17 +7,16 @@ const log = (...args: unknown[]) => DEBUG && console.log(...args);
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useRouter, useSearchParams, usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Loader2, Settings, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Loader2, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/auth/AuthContext';
 import { getCampaign, updateCampaign, CampaignWithDetails } from '@/lib/db/campaigns';
 import { getTemplate } from '@/lib/db/templates';
 import { supabase } from '@/lib/supabase';
-import { GenerationController, GenerationSettings, DEFAULT_GENERATION_SETTINGS } from '@/components/campaign/GenerationController';
-import { GenerationSettingsPanel } from '@/components/campaign/GenerationSettings';
+import { GenerationController, DEFAULT_GENERATION_SETTINGS } from '@/components/campaign/GenerationController';
 import { PinsGrid, PinCardData } from '@/components/campaign/PinCard';
 import { ExportToolbar } from '@/components/campaign/ExportToolbar';
-import { CampaignDetailsPanel } from '@/components/campaign/CampaignDetailsPanel';
+import { CampaignDashboardCard } from '@/components/campaign/CampaignDashboardCard';
 import { PinPreviewModal } from '@/components/campaign/PinPreviewModal';
 import { SelectionActionBar, DeleteConfirmationModal } from '@/components/ui/BulkActions';
 import { Element, CanvasSize } from '@/types/editor';
@@ -48,20 +47,26 @@ export default function CampaignDetailPage() {
     const [filterStatus, setFilterStatus] = useState<'all' | 'completed' | 'failed'>('all');
     const [selectAllScope, setSelectAllScope] = useState<'page' | 'all'>('page');
 
-    const [showSettings, setShowSettings] = useState(true);
-    const [settings, setSettings] = useState<GenerationSettings>(() => {
+    const [settings] = useState(DEFAULT_GENERATION_SETTINGS);
+    
+    // Render mode state (persisted to localStorage)
+    const [renderMode, setRenderMode] = useState<'client' | 'server'>(() => {
         if (typeof window !== 'undefined') {
-            try {
-                const saved = localStorage.getItem('pin-generator-settings');
-                if (saved) {
-                    return { ...DEFAULT_GENERATION_SETTINGS, ...JSON.parse(saved) };
-                }
-            } catch (e) {
-                console.warn('Failed to load settings from localStorage', e);
-            }
+            const saved = localStorage.getItem('pinGeneratorRenderMode');
+            if (saved === 'client' || saved === 'server') return saved;
         }
-        return DEFAULT_GENERATION_SETTINGS;
+        return 'server'; // Default to server
     });
+    
+    // Generation progress state for dashboard card
+    const [generationProgress, setGenerationProgress] = useState({
+        current: 0,
+        total: 0,
+        percentage: 0,
+    });
+    const [generationSpeed, setGenerationSpeed] = useState(0);
+    const [completedAt, setCompletedAt] = useState<string | undefined>(undefined);
+
     const [previewPin, setPreviewPin] = useState<PinCardData | null>(null);
 
     // Bulk selection state
@@ -147,18 +152,22 @@ export default function CampaignDetailPage() {
                 return;
             }
             
-            // Update campaign state - use functional update to verify if change is needed could be better 
-            // but for now, simple set depends on React to diff objects slightly? 
-            // Actually getCampaign returns new obj. 
+            // Update campaign state
             setCampaign(campaignData);
-
-            // Load campaign settings if they exist and we haven't loaded them
-            // (Only on first load ideally, but checks are cheap)
-            if (campaignData.generation_settings) {
-                const savedSettings = campaignData.generation_settings as unknown as GenerationSettings;
-                if (savedSettings.batchSize && savedSettings.quality && savedSettings.pauseEnabled !== undefined) {
-                    setSettings(prev => ({...prev, ...savedSettings}));
-                }
+            
+            // Sync progress state for dashboard card
+            const csvDataFromCampaign = (campaignData.csv_data || []) as Record<string, string>[];
+            const total = csvDataFromCampaign.length;
+            const current = campaignData.generated_pins || 0;
+            setGenerationProgress({
+                current,
+                total,
+                percentage: total > 0 ? (current / total) * 100 : 0,
+            });
+            
+            // Set completed timestamp if available
+            if (campaignData.completed_at) {
+                setCompletedAt(campaignData.completed_at);
             }
 
             // Load template if not already loaded (this is one-off)
@@ -336,10 +345,16 @@ export default function CampaignDetailPage() {
         });
     }, []);
 
-    // Handle progress update
-
-    const handleProgressUpdate = useCallback(() => {
-        // Optimization: Rely on server-side updates/polling
+    // Handle progress update from GenerationController
+    const handleProgressUpdate = useCallback((progress: { current: number; total: number; percentage: number; currentSpeed?: number }) => {
+        setGenerationProgress({
+            current: progress.current,
+            total: progress.total,
+            percentage: progress.percentage,
+        });
+        if (progress.currentSpeed !== undefined) {
+            setGenerationSpeed(progress.currentSpeed);
+        }
     }, []);
 
     // Handle status change
@@ -350,7 +365,9 @@ export default function CampaignDetailPage() {
             if (status === 'paused') {
                 updateData.paused_at = new Date().toISOString();
             } else if (status === 'completed') {
-                updateData.completed_at = new Date().toISOString();
+                const now = new Date().toISOString();
+                updateData.completed_at = now;
+                setCompletedAt(now);
             }
             const success = await updateCampaign(campaign.id, updateData);
             log('[CampaignPage] Update result:', success);
@@ -574,89 +591,64 @@ export default function CampaignDetailPage() {
 
     return (
         <div className="min-h-screen bg-gray-50">
-            {/* Header */}
+            {/* Header - Minimal */}
             <header className="bg-white border-b border-gray-200 sticky top-0 z-40">
-                <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                        <Link
-                            href="/dashboard/campaigns"
-                            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                        >
-                            <ArrowLeft className="w-5 h-5 text-gray-600" />
-                        </Link>
-                        <div>
-                            <h1 className="text-xl font-bold text-gray-900">{campaign.name}</h1>
-                            <p className="text-sm text-gray-500">
-                                {csvData.length} pins • {campaign.status}
-                            </p>
-                        </div>
-                    </div>
-
-                    <button
-                        onClick={() => setShowSettings(!showSettings)}
-                        className={cn(
-                            "flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors",
-                            showSettings
-                                ? "bg-blue-100 text-blue-700"
-                                : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                        )}
+                <div className="max-w-7xl mx-auto px-6 py-3">
+                    <Link
+                        href="/dashboard/campaigns"
+                        className="inline-flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors"
                     >
-                        <Settings className="w-4 h-4" />
-                        Settings
-                    </button>
+                        <ArrowLeft className="w-4 h-4" />
+                        <span className="text-sm font-medium">Back to Campaigns</span>
+                    </Link>
                 </div>
             </header>
 
-            <main className="max-w-7xl mx-auto px-6 py-8">
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    {/* Left Column: Info & Settings */}
-                    <div className="space-y-6">
-                        <CampaignDetailsPanel
-                            campaignName={campaign.name}
-                            templateName={templateData?.name}
-                            templateThumbnail={templateData?.thumbnail_url || undefined}
-                            canvasWidth={template?.canvas_size.width}
-                            canvasHeight={template?.canvas_size.height}
-                            templateId={campaign.template_id}
-                            csvRowCount={csvData.length}
-                            createdAt={campaign.created_at}
-                            status={campaign.status}
-                            generatedCount={Math.max(generatedPins.length, pagination.total)}
-                        />
+            <main className="max-w-7xl mx-auto px-6 py-4 space-y-4">
+                {/* Unified Campaign Dashboard Card */}
+                <CampaignDashboardCard
+                    campaignName={campaign.name}
+                    templateName={templateData?.name}
+                    templateThumbnail={templateData?.thumbnail_url || undefined}
+                    canvasSize={templateData?.canvas_size}
+                    csvRowCount={csvData.length}
+                    createdAt={campaign.created_at}
+                    renderMode={renderMode}
+                    onRenderModeChange={(mode) => {
+                        setRenderMode(mode);
+                        localStorage.setItem('pinGeneratorRenderMode', mode);
+                    }}
+                    disabled={campaign.status === 'processing'}
+                    status={campaign.status}
+                    progress={generationProgress}
+                    completedAt={completedAt}
+                    speed={generationSpeed}
+                />
 
-                        {showSettings && (
-                            <GenerationSettingsPanel
-                                settings={settings}
-                                onChange={setSettings}
-                                disabled={campaign.status === 'processing'}
-                            />
-                        )}
-                    </div>
+                {/* Generation Controller - Minimal (only buttons) */}
+                <GenerationController
+                    campaignId={campaign.id}
+                    userId={currentUser?.id || ''}
+                    templateElements={template.elements}
+                    canvasSize={template.canvas_size}
+                    backgroundColor={template.background_color}
+                    templateSnapshots={campaign.template_snapshot || undefined}
+                    distributionMode={campaign.distribution_mode || 'sequential'}
+                    csvData={csvData}
+                    fieldMapping={fieldMapping}
+                    initialSettings={settings}
+                    initialProgress={campaign.current_index || 0}
+                    initialStatus={campaign.status}
+                    generatedCount={Math.max(generatedPins.length, pagination.total)}
+                    onPinGenerated={handlePinGenerated}
+                    onProgressUpdate={handleProgressUpdate}
+                    onStatusChange={handleStatusChange}
+                    minimal={true}
+                />
 
-                    {/* Right Column: Generation & Pins */}
-                    <div className="lg:col-span-2 space-y-6">
-                        <GenerationController
-                            campaignId={campaign.id}
-                            userId={currentUser?.id || ''}
-                            templateElements={template.elements}
-                            canvasSize={template.canvas_size}
-                            backgroundColor={template.background_color}
-                            templateSnapshots={campaign.template_snapshot || undefined}
-                            distributionMode={campaign.distribution_mode || 'sequential'}
-                            csvData={csvData}
-                            fieldMapping={fieldMapping}
-                            initialSettings={settings}
-                            initialProgress={campaign.current_index || 0}
-                            initialStatus={campaign.status}
-                            generatedCount={Math.max(generatedPins.length, pagination.total)}
-                            onPinGenerated={handlePinGenerated}
-                            onProgressUpdate={handleProgressUpdate}
-                            onStatusChange={handleStatusChange}
-                        />
-
-                        {/* Pins Grid with Unified Header and Secondary Toolbar */}
-                        {generatedPins.length > 0 && (
-                            <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow">
+                {/* Pins Grid with Unified Header and Secondary Toolbar */}
+                {generatedPins.length > 0 && (
+                    <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow">
                                 {/* Primary Header: Title & Global Actions */}
                                 <div className="p-4 flex flex-col sm:flex-row items-center justify-between gap-4 bg-white">
                                     <div className="flex items-center gap-3">
@@ -851,8 +843,6 @@ export default function CampaignDetailPage() {
                                 </div>
                             </div>
                         )}
-                    </div>
-                </div>
             </main>      {/* DB Load More Removed in favor of Server-Side Pagination */}
 
 

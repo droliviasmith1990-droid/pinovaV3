@@ -29,10 +29,8 @@ import { supabase } from '@/lib/supabase';
 // Types
 // ============================================
 export interface GenerationSettings {
-    batchSize: number;
-    quality: 'draft' | 'normal' | 'high' | 'ultra';
     pauseEnabled: boolean;
-    renderMode: 'auto' | 'client' | 'server';
+    renderMode: 'client' | 'server';
 }
 
 export interface GenerationProgress {
@@ -56,20 +54,13 @@ export interface GenerationProgress {
     currentPinIndex: number;
 }
 
-// Quality to multiplier mapping
-const QUALITY_MAP: Record<GenerationSettings['quality'], number> = {
-    draft: 1,
-    normal: 2,
-    high: 3,
-    ultra: 4,
-};
+// Fixed quality: Normal (1x) - Standard resolution, fastest generation
+const QUALITY_MULTIPLIER = 1;
 
-// Default settings
+// Default settings (simplified)
 export const DEFAULT_GENERATION_SETTINGS: GenerationSettings = {
-    batchSize: 10,
-    quality: 'draft', // Changed to 'draft' (1x) as requested
     pauseEnabled: true,
-    renderMode: 'auto',
+    renderMode: 'server',
 };
 
 // ============================================
@@ -98,6 +89,9 @@ interface GenerationControllerProps {
     onPinGenerated: (pin: PinCardData) => void;
     onProgressUpdate: (progress: GenerationProgress) => void;
     onStatusChange: (status: string) => void;
+    
+    // UI Options
+    minimal?: boolean; // Hide progress/render mode UI, show only action buttons
 }
 
 // ============================================
@@ -125,6 +119,7 @@ export function GenerationController({
     onPinGenerated,
     onProgressUpdate,
     onStatusChange,
+    minimal = false,
 }: GenerationControllerProps) {
     // ============================================
     // Multi-Template Distribution Setup
@@ -533,10 +528,9 @@ export function GenerationController({
             const tRender = performance.now();
 
             // Export to blob - OPTIMIZED: Use JPEG directly (faster, smaller)
-            // JPEG 0.8 offers excellent quality/size balance (visually similar to 0.9 but 20-30% smaller)
-            const multiplier = QUALITY_MAP[settings.quality];
+            // Fixed quality: Normal (1x) - Standard resolution, fastest generation
             const blob = await exportToBlob(canvas, { 
-                multiplier, 
+                multiplier: QUALITY_MULTIPLIER, 
                 format: 'jpeg', 
                 quality: 0.8 
             });
@@ -564,7 +558,7 @@ export function GenerationController({
             // Always release canvas back to pool
             canvasPoolRef.current.release(canvas);
         }
-    }, [canvasSize, templateElements, backgroundColor, fieldMapping, settings.quality, getTemplateForRowIndex, updateTemplateStats]);
+    }, [canvasSize, templateElements, backgroundColor, fieldMapping, getTemplateForRowIndex, updateTemplateStats]);
 
     // ============================================
     // Start Generation (BATCH Processing - 10x Faster)
@@ -1000,28 +994,30 @@ export function GenerationController({
 
     return (
         <div className="space-y-4">
-            {/* Enhanced Progress Tracker */}
-            <EnhancedProgressTracker
-                completed={generatedCount || progress.current}
-                total={csvData.length}
-                status={trackerStatus}
-                pinsPerSecond={progress.currentSpeed}
-                elapsedTimeMs={progress.elapsedTime}
-                etaFormatted={progress.estimatedTimeRemaining > 0 
-                    ? formatDuration(progress.estimatedTimeRemaining) 
-                    : '--'}
-                isEtaReliable={(generatedCount || progress.current) >= 5}
-                currentPinTitle={progress.currentPinTitle}
-                currentPinIndex={progress.currentPinIndex}
-                pauseEnabled={settings.pauseEnabled && renderMode !== 'server'}
-                isPausing={isPausing}
-                onPause={pauseGeneration}
-                onResume={resumeGeneration}
-                errorCount={progress.errors.length}
-            />
+            {/* Enhanced Progress Tracker - Hidden in minimal mode */}
+            {!minimal && (
+                <EnhancedProgressTracker
+                    completed={generatedCount || progress.current}
+                    total={csvData.length}
+                    status={trackerStatus}
+                    pinsPerSecond={progress.currentSpeed}
+                    elapsedTimeMs={progress.elapsedTime}
+                    etaFormatted={progress.estimatedTimeRemaining > 0 
+                        ? formatDuration(progress.estimatedTimeRemaining) 
+                        : '--'}
+                    isEtaReliable={(generatedCount || progress.current) >= 5}
+                    currentPinTitle={progress.currentPinTitle}
+                    currentPinIndex={progress.currentPinIndex}
+                    pauseEnabled={settings.pauseEnabled && renderMode !== 'server'}
+                    isPausing={isPausing}
+                    onPause={pauseGeneration}
+                    onResume={resumeGeneration}
+                    errorCount={progress.errors.length}
+                />
+            )}
 
-            {/* Render Mode Indicator */}
-            {activeMode && (
+            {/* Render Mode Indicator - Hidden in minimal mode */}
+            {!minimal && activeMode && (
                 <div className="flex items-center gap-2 text-sm text-gray-500 px-2">
                     <span className="flex items-center gap-1 text-xs bg-gray-100 px-2 py-0.5 rounded">
                         {activeMode === 'server' ? <Server className="w-3 h-3" /> : <Monitor className="w-3 h-3" />}
@@ -1030,8 +1026,8 @@ export function GenerationController({
                 </div>
             )}
 
-            {/* Resume from Saved State - SMART RESUME LOGIC */}
-            {canResume && !isStale && status !== 'processing' && status !== 'completed' && savedState && (() => {
+            {/* Resume from Saved State - Hidden in minimal mode */}
+            {!minimal && canResume && !isStale && status !== 'processing' && status !== 'completed' && savedState && (() => {
                 // Calculate smart resume index: Max of local saved state OR confirmed DB count
                 const lastDbIndex = generatedCount ? generatedCount - 1 : -1;
                 const smartLastIndex = Math.max(savedState.lastCompletedIndex, lastDbIndex);
@@ -1072,8 +1068,8 @@ export function GenerationController({
                 );
             })()}
 
-            {/* Render Mode Selector - Only show when not processing */}
-            {(status === 'pending' || status === 'failed' || status === 'completed' || status === 'paused') && (
+            {/* Render Mode Selector - Hidden in minimal mode */}
+            {!minimal && (status === 'pending' || status === 'failed' || status === 'completed' || status === 'paused') && (
                 <div className="p-4 bg-gray-50 rounded-lg border">
                     <div className="text-sm font-medium mb-3 text-gray-700">Render Mode</div>
                     <div className="space-y-2">
