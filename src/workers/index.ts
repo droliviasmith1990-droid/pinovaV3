@@ -12,6 +12,7 @@ const connection = new Redis(connectionStr, {
 });
 
 console.log('🚀 Worker started. Listening for jobs...');
+console.log('!!! WORKER RELOADED - VERSION 100 !!!');
 console.log(`🔌 Redis: ${connectionStr.replace(/:[^@]+@/, ':***@')}`); // Shield password in logs
 
 const worker = new Worker('campaign-generation', async (job) => {
