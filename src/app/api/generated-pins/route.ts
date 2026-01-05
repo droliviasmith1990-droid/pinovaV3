@@ -373,11 +373,13 @@ export async function GET(request: NextRequest) {
             case 'created_at_asc':
                 query = query.order('created_at', { ascending: true });
                 break;
-            case 'index_asc':
-                // Try sorting by data_row->rowIndex if possible, else fallback to created_at asc
-                // Note: Sorting by JSONDB field in simple query builder might be limited in JS client
-                // For now, we'll use created_at ascending as a proxy for "Original Order"
-                query = query.order('created_at', { ascending: true }); 
+            case 'row_index_desc':
+                // Sort by CSV row index (high to low) using JSONB field
+                query = query.order('data_row->rowIndex', { ascending: false, nullsFirst: false });
+                break;
+            case 'row_index_asc':
+                // Sort by CSV row index (low to high) using JSONB field
+                query = query.order('data_row->rowIndex', { ascending: true, nullsFirst: false });
                 break;
             case 'created_at_desc':
             default:

@@ -7,108 +7,22 @@ const log = (...args: unknown[]) => DEBUG && console.log(...args);
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useRouter, useSearchParams, usePathname } from 'next/navigation';
 import Link from 'next/link';
-import Image from 'next/image';
 import { ArrowLeft, Loader2, Settings, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/auth/AuthContext';
 import { getCampaign, updateCampaign, CampaignWithDetails } from '@/lib/db/campaigns';
 import { getTemplate } from '@/lib/db/templates';
 import { supabase } from '@/lib/supabase';
-import { GenerationController, GenerationSettings, GenerationProgress, DEFAULT_GENERATION_SETTINGS } from '@/components/campaign/GenerationController';
+import { GenerationController, GenerationSettings, DEFAULT_GENERATION_SETTINGS } from '@/components/campaign/GenerationController';
 import { GenerationSettingsPanel } from '@/components/campaign/GenerationSettings';
 import { PinsGrid, PinCardData } from '@/components/campaign/PinCard';
 import { ExportToolbar } from '@/components/campaign/ExportToolbar';
 import { CampaignDetailsPanel } from '@/components/campaign/CampaignDetailsPanel';
+import { PinPreviewModal } from '@/components/campaign/PinPreviewModal';
 import { SelectionActionBar, DeleteConfirmationModal } from '@/components/ui/BulkActions';
 import { Element, CanvasSize } from '@/types/editor';
 import { toast } from 'sonner';
 
-// Reusable Pagination Component
-interface PaginationControlsProps {
-    currentPage: number;
-    totalPages: number;
-    pagination: { total: number; limit: number };
-    goToPageInput: string;
-    setGoToPageInput: (val: string) => void;
-    onPageChange: (page: number) => void;
-    className?: string; // For styling tweaks (border/margin)
-}
-
-const PaginationControls: React.FC<PaginationControlsProps> = ({
-    currentPage,
-    totalPages,
-    pagination,
-    goToPageInput,
-    setGoToPageInput,
-    onPageChange,
-    className
-}) => {
-    if (totalPages <= 1) return null;
-    
-    return (
-        <div className={cn("flex items-center justify-between", className)}>
-            <p className="text-sm text-gray-500">
-                Showing {((currentPage - 1) * pagination.limit) + 1} to {Math.min(currentPage * pagination.limit, pagination.total)} of {pagination.total} results
-            </p>
-            <div className="flex items-center gap-2">
-                <span className="text-sm text-gray-500 mr-2">
-                    Go to page:
-                    <input 
-                        type="text"
-                        value={goToPageInput}
-                        onChange={(e) => setGoToPageInput(e.target.value)}
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                                const p = parseInt(goToPageInput);
-                                if (!isNaN(p) && p >= 1 && p <= totalPages) {
-                                    onPageChange(p);
-                                }
-                            }
-                        }}
-                        className="w-12 ml-2 px-2 py-1 text-sm border border-gray-300 rounded text-center"
-                    />
-                </span>
-
-                <button
-                    onClick={() => onPageChange(currentPage - 1)}
-                    disabled={currentPage === 1}
-                    className="px-3 py-1.5 text-sm font-medium text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                    Previous
-                </button>
-                <div className="flex items-center gap-1">
-                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                        const startPage = Math.max(1, Math.min(currentPage - 2, totalPages - 4));
-                        const p = startPage + i;
-                        if (p < 1 || p > totalPages) return null;
-                        
-                        return (
-                            <button
-                                key={p}
-                                onClick={() => onPageChange(p)}
-                                className={cn(
-                                    "w-8 h-8 flex items-center justify-center rounded-lg text-sm font-medium transition-colors",
-                                    currentPage === p
-                                        ? "bg-blue-600 text-white"
-                                        : "text-gray-600 hover:bg-gray-100"
-                                )}
-                            >
-                                {p}
-                            </button>
-                        );
-                    })}
-                </div>
-                <button
-                    onClick={() => onPageChange(currentPage + 1)}
-                    disabled={currentPage === totalPages}
-                    className="px-3 py-1.5 text-sm font-medium text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                    Next
-                </button>
-            </div>
-        </div>
-    );
-};
 
 export default function CampaignDetailPage() {
     const params = useParams();
@@ -163,7 +77,7 @@ export default function CampaignDetailPage() {
     // Initialize pagination from URL or defaults
     const [pagination, setPagination] = useState({ 
         page: Number(searchParams.get('page')) || 1, 
-        limit: Number(searchParams.get('limit')) || 20, // Default to 20 as requested
+        limit: Number(searchParams.get('limit')) || 10, // Default to 10 per page
         hasMore: true, 
         total: 0, 
         isLoading: false 
@@ -204,7 +118,7 @@ export default function CampaignDetailPage() {
     // Update local state when URL changes (handle back/forward)
     useEffect(() => {
         const p = Number(searchParams.get('page')) || 1;
-        const l = Number(searchParams.get('limit')) || 20;
+        const l = Number(searchParams.get('limit')) || 10;
         const s = searchParams.get('sort') || 'created_at_desc';
         
         setPagination(prev => {
@@ -393,7 +307,7 @@ export default function CampaignDetailPage() {
             log('Campaign completed but pins missing locally - reloading...');
             loadGeneratedPins(1);
         }
-    }, [campaign?.status, generatedPins.length, pagination.total, loadGeneratedPins]);
+    }, [campaign?.status, generatedPins.length, pagination.total, loadGeneratedPins, pagination.limit]);
 
     // Track if we have performed the initial load
     const initialLoadRef = useRef(false);
@@ -423,17 +337,9 @@ export default function CampaignDetailPage() {
     }, []);
 
     // Handle progress update
-    const handleProgressUpdate = useCallback(async (progress: GenerationProgress) => {
-        // 🚀 OPTIMIZATION: We rely on the API (server-side) to atomically update generated_pins count
-        // via the incrementally saved batches. Doing it here causes double-writes and race conditions.
-        // We only use this for UI updates if needed, but the parent GenerationController handles UI local state.
-        
-        // if (campaign && progress.current % 5 === 0) {
-        //     await updateCampaign(campaign.id, {
-        //         generated_pins: progress.current,
-        //         current_index: progress.current,
-        //     });
-        // }
+
+    const handleProgressUpdate = useCallback(() => {
+        // Optimization: Rely on server-side updates/polling
     }, []);
 
     // Handle status change
@@ -705,7 +611,6 @@ export default function CampaignDetailPage() {
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     {/* Left Column: Info & Settings */}
                     <div className="space-y-6">
-                        {/* Campaign Details Panel */}
                         <CampaignDetailsPanel
                             campaignName={campaign.name}
                             templateName={templateData?.name}
@@ -719,7 +624,6 @@ export default function CampaignDetailPage() {
                             generatedCount={Math.max(generatedPins.length, pagination.total)}
                         />
 
-                        {/* Settings Panel */}
                         {showSettings && (
                             <GenerationSettingsPanel
                                 settings={settings}
@@ -731,14 +635,12 @@ export default function CampaignDetailPage() {
 
                     {/* Right Column: Generation & Pins */}
                     <div className="lg:col-span-2 space-y-6">
-                        {/* Generation Controller */}
                         <GenerationController
                             campaignId={campaign.id}
                             userId={currentUser?.id || ''}
                             templateElements={template.elements}
                             canvasSize={template.canvas_size}
                             backgroundColor={template.background_color}
-                            // Multi-template props
                             templateSnapshots={campaign.template_snapshot || undefined}
                             distributionMode={campaign.distribution_mode || 'sequential'}
                             csvData={csvData}
@@ -752,140 +654,181 @@ export default function CampaignDetailPage() {
                             onStatusChange={handleStatusChange}
                         />
 
-                        <div className="flex justify-end items-center gap-3">
-                            <div className="flex items-center gap-2">
-                                <span className="text-sm text-gray-500">Show:</span>
-                                <select
-                                    value={pagination.limit}
-                                    onChange={(e) => {
-                                        const newLimit = Number(e.target.value);
-                                        // Reset to page 1 when limit changes to avoid out of bounds
-                                        updateUrl(1, newLimit, sortBy);
-                                        loadGeneratedPins(1, newLimit, sortBy);
-                                    }}
-                                    className="text-sm border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 py-1.5"
-                                >
-                                    {[10, 20, 30, 50, 100].map(size => (
-                                        <option key={size} value={size}>{size} per page</option>
-                                    ))}
-                                </select>
-                            </div>
-                            
-                            <div className="flex items-center gap-2">
-                                <span className="text-sm text-gray-500">Sort:</span>
-                                <select
-                                    value={sortBy}
-                                    onChange={(e) => {
-                                        const newSort = e.target.value;
-                                        setSortBy(newSort);
-                                        // Reset to page 1 on sort change usually makes sense
-                                        updateUrl(1, pagination.limit, newSort);
-                                        loadGeneratedPins(1, pagination.limit, newSort);
-                                    }}
-                                    className="text-sm border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 py-1.5"
-                                >
-                                    <option value="created_at_desc">Newest First</option>
-                                    <option value="created_at_asc">Oldest First</option>
-                                    {/* <option value="index_asc">CSV Row Order</option> */ /* Waiting for backend support for JSON sorting */}
-                                </select>
-                            </div>
-                            <button
-                                onClick={() => loadGeneratedPins(currentPage, pagination.limit, sortBy)}
-                                disabled={pagination.isLoading}
-                                className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors shadow-sm"
-                                title="Refresh list from server"
-                            >
-                                <RefreshCw className={`w-4 h-4 ${pagination.isLoading ? 'animate-spin' : ''}`} />
-                                Refresh List
-                            </button>
-                        </div>
-
-                        {/* Export Toolbar */}
+                        {/* Pins Grid with Unified Header and Secondary Toolbar */}
                         {generatedPins.length > 0 && (
-                            <ExportToolbar
-                                pins={generatedPins}
-                                campaignName={campaign.name}
-                                csvData={csvData}
-                                totalCount={pagination.total}
-                                isEntireCampaignSelected={selectAllScope === 'all'}
-                            />
-                        )}
-
-                        {/* Pins Grid with Filter Tabs and Pagination */}
-                        {generatedPins.length > 0 && (
-                            <div className="bg-white border border-gray-200 rounded-xl p-6">
-                                <div className="flex flex-col gap-6 mb-6">
-                                    <div className="flex items-center justify-between">
-                                        <h3 className="font-semibold text-gray-900">
+                            <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow">
+                                {/* Primary Header: Title & Global Actions */}
+                                <div className="p-4 flex flex-col sm:flex-row items-center justify-between gap-4 bg-white">
+                                    <div className="flex items-center gap-3">
+                                        <h3 className="font-bold text-gray-900 text-lg tracking-tight">
                                             Generated Pins
                                         </h3>
                                         {selectedPinIds.size > 0 && (
-                                            <span className="text-sm text-blue-600 font-medium">
+                                            <span className="px-2.5 py-0.5 bg-blue-50 text-blue-700 text-xs font-semibold rounded-full border border-blue-100">
                                                 {selectedPinIds.size} selected
                                             </span>
                                         )}
                                     </div>
                                     
-                                    {/* Filter Tabs */}
-                                    <div className="flex items-center gap-2 p-1 bg-gray-100 rounded-lg w-fit">
-                                        <button
-                                            onClick={() => setFilterStatus('all')}
-                                            className={cn(
-                                                "px-4 py-1.5 rounded-md text-sm font-medium transition-all",
-                                                filterStatus === 'all'
-                                                    ? "bg-white text-gray-900 shadow-sm"
-                                                    : "text-gray-500 hover:text-gray-700"
-                                            )}
-                                        >
-                                            All <span className="ml-1 text-xs opacity-60">({counts.all})</span>
-                                        </button>
-                                        <button
-                                            onClick={() => setFilterStatus('completed')}
-                                            className={cn(
-                                                "px-4 py-1.5 rounded-md text-sm font-medium transition-all",
-                                                filterStatus === 'completed'
-                                                    ? "bg-white text-green-700 shadow-sm"
-                                                    : "text-gray-500 hover:text-gray-700"
-                                            )}
-                                        >
-                                            Success <span className="ml-1 text-xs opacity-60">({counts.completed})</span>
-                                        </button>
-                                        <button
-                                            onClick={() => setFilterStatus('failed')}
-                                            className={cn(
-                                                "px-4 py-1.5 rounded-md text-sm font-medium transition-all",
-                                                filterStatus === 'failed'
-                                                    ? "bg-white text-red-700 shadow-sm"
-                                                    : "text-gray-500 hover:text-gray-700"
-                                            )}
-                                        >
-                                            Failed 
-                                            {counts.failed > 0 && (
-                                                <span className="ml-2 px-1.5 py-0.5 bg-red-100 text-red-700 rounded-full text-xs font-bold">
-                                                    {counts.failed}
-                                                </span>
-                                            )}
-                                        </button>
-                                    </div>
+                                    <ExportToolbar
+                                        pins={generatedPins}
+                                        campaignName={campaign.name}
+                                        csvData={csvData}
+                                        totalCount={pagination.total}
+                                        isEntireCampaignSelected={selectAllScope === 'all'}
+                                        minimal={true}
+                                    />
                                 </div>
 
+                                {/* Secondary Toolbar: Filters & View Controls */}
+                                <div className="px-4 py-2 bg-gray-50 border-t border-b border-gray-100 flex flex-col xl:flex-row items-center justify-between gap-4">
+                                    {/* Left: Filter Tabs (Clean Pills) */}
+                                    <div className="flex items-center gap-2">
+                                        {(['all', 'completed', 'failed'] as const).map((status) => (
+                                            <button
+                                                key={status}
+                                                onClick={() => setFilterStatus(status)}
+                                                className={cn(
+                                                    "px-3 py-1.5 rounded-full text-xs font-medium transition-all flex items-center gap-2 border",
+                                                    filterStatus === status
+                                                        ? "bg-orange-600 text-white border-orange-600 shadow-sm"
+                                                        : "bg-white text-gray-600 border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+                                                )}
+                                            >
+                                                {status === 'all' && 'All'}
+                                                {status === 'completed' && 'Success'}
+                                                {status === 'failed' && 'Failed'}
+                                                
+                                                <span className={cn(
+                                                    "text-[10px] px-1.5 py-0.5 rounded-full",
+                                                    filterStatus === status 
+                                                        ? "bg-white/20 text-white" 
+                                                        : "bg-gray-100 text-gray-600"
+                                                )}>
+                                                    {counts[status]}
+                                                </span>
+                                            </button>
+                                        ))}
+                                    </div>
 
-                                {displayedPins.length > 0 ? (
-                                    <>
-                                        {/* Pagination Controls - Above */}
-                                        <PaginationControls
-                                            currentPage={currentPage}
-                                            totalPages={totalPages}
-                                            pagination={pagination}
-                                            goToPageInput={goToPageInput}
-                                            setGoToPageInput={setGoToPageInput}
-                                            onPageChange={(p) => {
-                                                updateUrl(p, pagination.limit, sortBy);
-                                                loadGeneratedPins(p, pagination.limit, sortBy);
-                                            }}
-                                            className="mb-6 pb-6 border-b border-gray-100"
-                                        />
+                                    {/* Right: Pagination & Display Controls */}
+                                    <div className="flex flex-wrap items-center gap-4 justify-end">
+                                        <span className="text-xs text-gray-500 font-medium">
+                                            Showing <span className="font-bold text-gray-900">{((currentPage - 1) * pagination.limit) + 1}-{Math.min(currentPage * pagination.limit, pagination.total)}</span> of <span className="font-bold text-gray-900">{pagination.total}</span>
+                                        </span>
 
+                                        <div className="h-4 w-px bg-gray-300 hidden sm:block"></div>
+
+                                        {/* Controls Group */}
+                                        <div className="flex items-center gap-2">
+                                            {/* Limit Selector */}
+                                            <div className="relative">
+                                                <select
+                                                    value={pagination.limit}
+                                                    onChange={(e) => {
+                                                        const newLimit = Number(e.target.value);
+                                                        updateUrl(1, newLimit, sortBy);
+                                                        loadGeneratedPins(1, newLimit, sortBy);
+                                                    }}
+                                                    className="appearance-none bg-white border border-gray-300 hover:border-gray-400 text-gray-700 text-xs font-medium rounded-md py-1.5 pl-3 pr-7 cursor-pointer focus:outline-none focus:ring-1 focus:ring-orange-500 focus:border-orange-500"
+                                                >
+                                                    {[10, 20, 30, 50, 100].map(size => (
+                                                        <option key={size} value={size}>{size} / page</option>
+                                                    ))}
+                                                </select>
+                                                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
+                                                    <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                                                </div>
+                                            </div>
+
+                                            {/* Sort Selector */}
+                                            <div className="relative">
+                                                <select
+                                                    value={sortBy}
+                                                    onChange={(e) => {
+                                                        const newSort = e.target.value;
+                                                        setSortBy(newSort);
+                                                        updateUrl(1, pagination.limit, newSort);
+                                                        loadGeneratedPins(1, pagination.limit, newSort);
+                                                    }}
+                                                    className="appearance-none bg-white border border-gray-300 hover:border-gray-400 text-gray-700 text-xs font-medium rounded-md py-1.5 pl-3 pr-7 cursor-pointer focus:outline-none focus:ring-1 focus:ring-orange-500 focus:border-orange-500"
+                                                >
+                                                    <option value="created_at_desc">Newest</option>
+                                                    <option value="created_at_asc">Oldest</option>
+                                                    <option value="row_index_desc">Row (High→Low)</option>
+                                                    <option value="row_index_asc">Row (Low→High)</option>
+                                                </select>
+                                                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
+                                                    <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                                                </div>
+                                            </div>
+
+                                            {/* Refresh Button */}
+                                            <button
+                                                onClick={() => loadGeneratedPins(currentPage, pagination.limit, sortBy)}
+                                                disabled={pagination.isLoading}
+                                                className="h-8 w-8 flex items-center justify-center text-gray-600 hover:text-orange-600 hover:bg-orange-50 rounded-md border border-gray-300 hover:border-orange-200 transition-all bg-white"
+                                                title="Refresh list"
+                                            >
+                                                <RefreshCw className={cn("w-3.5 h-3.5", pagination.isLoading && "animate-spin")} />
+                                            </button>
+                                        </div>
+
+                                        <div className="h-4 w-px bg-gray-300 hidden sm:block"></div>
+
+                                        {/* Pagination Arrows */}
+                                        <div className="flex items-center gap-1">
+                                            <button
+                                                onClick={() => {
+                                                    const p = Math.max(1, currentPage - 1);
+                                                    updateUrl(p, pagination.limit, sortBy);
+                                                    loadGeneratedPins(p, pagination.limit, sortBy);
+                                                }}
+                                                disabled={currentPage === 1}
+                                                className="h-8 w-8 flex items-center justify-center rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                                            >
+                                                <span className="sr-only">Previous</span>
+                                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+                                            </button>
+
+                                            {/* Page Input */}
+                                            <div className="flex items-center mx-1">
+                                                 <input 
+                                                    type="text"
+                                                    value={goToPageInput}
+                                                    onChange={(e) => setGoToPageInput(e.target.value)}
+                                                    onKeyDown={(e) => {
+                                                        if (e.key === 'Enter') {
+                                                            const p = parseInt(goToPageInput);
+                                                            if (!isNaN(p) && p >= 1 && p <= totalPages) {
+                                                                updateUrl(p, pagination.limit, sortBy);
+                                                                loadGeneratedPins(p, pagination.limit, sortBy);
+                                                            }
+                                                        }
+                                                    }}
+                                                    className="w-10 h-8 px-1 text-xs text-center border border-gray-300 rounded-md focus:ring-1 focus:ring-orange-500 focus:border-orange-500"
+                                                />
+                                                <span className="text-xs text-gray-500 ml-1">/ {totalPages}</span>
+                                            </div>
+
+                                            <button
+                                                onClick={() => {
+                                                    const p = Math.min(totalPages, currentPage + 1);
+                                                    updateUrl(p, pagination.limit, sortBy);
+                                                    loadGeneratedPins(p, pagination.limit, sortBy);
+                                                }}
+                                                disabled={currentPage === totalPages}
+                                                className="h-8 w-8 flex items-center justify-center rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                                            >
+                                                <span className="sr-only">Next</span>
+                                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div className="p-6 bg-gray-50/30 min-h-[500px]">
+                                    {displayedPins.length > 0 ? (
                                         <PinsGrid
                                             pins={displayedPins}
                                             selectedIds={selectedPinIds}
@@ -894,33 +837,24 @@ export default function CampaignDetailPage() {
                                             onPreview={handlePreview}
                                             onDeletePin={handleDeletePin}
                                         />
-                                        
-                                        {/* Pagination Controls - Below */}
-                                        <PaginationControls
-                                            currentPage={currentPage}
-                                            totalPages={totalPages}
-                                            pagination={pagination}
-                                            goToPageInput={goToPageInput}
-                                            setGoToPageInput={setGoToPageInput}
-                                            onPageChange={(p) => {
-                                                updateUrl(p, pagination.limit, sortBy);
-                                                loadGeneratedPins(p, pagination.limit, sortBy);
-                                            }}
-                                            className="mt-6 pt-6 border-t border-gray-100"
-                                        />
-                                    </>
-                                ) : (
-                                    <div className="py-12 text-center">
-                                        <p className="text-gray-500">No pins found matching this filter.</p>
-                                    </div>
-                                )}
+                                    ) : (
+                                        <div className="py-20 text-center flex flex-col items-center justify-center">
+                                            <div className="h-16 w-16 bg-gray-100 rounded-full flex items-center justify-center mb-4">
+                                                <RefreshCw className="h-8 w-8 text-gray-400" />
+                                            </div>
+                                            <h3 className="text-lg font-medium text-gray-900">No pins found</h3>
+                                            <p className="text-gray-500 mt-1 max-w-sm">
+                                                No generated pins match the current filters. Try changing the status filter or refreshing the list.
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         )}
                     </div>
                 </div>
+            </main>      {/* DB Load More Removed in favor of Server-Side Pagination */}
 
-                {/* DB Load More Removed in favor of Server-Side Pagination */}
-            </main>
 
             {/* Bulk Selection Action Bar */}
             <SelectionActionBar
@@ -952,24 +886,13 @@ export default function CampaignDetailPage() {
                 deleteProgress={deleteProgress}
             />
 
-            {/* Preview Modal */}
-            {previewPin && (
-                <div
-                    className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80"
-                    onClick={() => setPreviewPin(null)}
-                >
-                    <div className="relative" onClick={(e) => e.stopPropagation()}>
-                         <Image
-                            src={previewPin.imageUrl}
-                            alt={`Pin ${previewPin.rowIndex + 1}`}
-                            width={1000}
-                            height={1500}
-                            className="max-w-full max-h-[90vh] w-auto h-auto rounded-lg shadow-2xl"
-                            unoptimized
-                        />
-                    </div>
-                </div>
-            )}
+            {/* Enhanced Preview Modal with Keyboard Navigation */}
+            <PinPreviewModal
+                pin={previewPin}
+                pins={displayedPins}
+                onClose={() => setPreviewPin(null)}
+                onNavigate={setPreviewPin}
+            />
         </div>
     );
 }

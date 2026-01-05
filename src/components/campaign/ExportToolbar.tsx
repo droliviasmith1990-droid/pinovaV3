@@ -14,17 +14,27 @@ interface ExportToolbarProps {
     csvData?: Record<string, string>[];
     totalCount?: number;
     isEntireCampaignSelected?: boolean;
+    minimal?: boolean;
 }
 
-export function ExportToolbar({ pins, campaignName, csvData, totalCount, isEntireCampaignSelected }: ExportToolbarProps) {
+export function ExportToolbar({ pins, campaignName, csvData, totalCount, isEntireCampaignSelected, minimal = false }: ExportToolbarProps) {
     const [isZipping, setIsZipping] = useState(false);
-    const [zipProgress, setZipProgress] = useState({ current: 0, total: 0 });
     const [isCopied, setIsCopied] = useState(false);
+    const [zipProgress, setZipProgress] = useState<{ current: number; total: number }>({ current: 0, total: 0 });
 
     const completedPins = pins.filter((p) => p.status === 'completed' && p.imageUrl);
 
+    // ... (logic remains same) ...
+
+    // Use a fragment or simple div if minimal, else the styled card
+    const Container = minimal ? 'div' : 'div';
+    const containerClass = minimal 
+        ? "flex items-center gap-2" 
+        : "flex items-center gap-3 p-4 bg-gray-50 rounded-xl border border-gray-200";
+
     // Download All as ZIP
     const handleDownloadZip = async () => {
+        // ... (logic remains same) ...
         if (completedPins.length === 0 && !isEntireCampaignSelected) {
             toast.error('No pins to download');
             return;
@@ -142,9 +152,6 @@ export function ExportToolbar({ pins, campaignName, csvData, totalCount, isEntir
         try {
             await navigator.clipboard.writeText(urlsToCopy);
             setIsCopied(true);
-            // Only show second toast if we copied manual pins or fetch was silent
-            // But since we showed 'URLs fetched successfully', adding another toast 'Copied' is slightly redundant but ok.
-            // Better: 'URLs fetched and copied!'
             toast.success(`${isEntireCampaignSelected ? 'All' : completedPins.length} URLs copied to clipboard`);
             setTimeout(() => setIsCopied(false), 2000);
         } catch {
@@ -258,26 +265,26 @@ export function ExportToolbar({ pins, campaignName, csvData, totalCount, isEntir
     };
 
     return (
-        <div className="flex items-center gap-3 p-4 bg-gray-50 rounded-xl border border-gray-200">
+        <Container className={containerClass}>
             {/* Download ZIP */}
             <button
                 onClick={handleDownloadZip}
                 disabled={isZipping || completedPins.length === 0}
                 className={cn(
-                    "flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium text-sm transition-all",
-                    "bg-blue-600 text-white hover:bg-blue-700",
+                    "flex items-center gap-2 px-3 py-2 rounded-lg font-medium text-xs transition-all",
+                    "bg-orange-600 text-white hover:bg-orange-700",
                     (isZipping || completedPins.length === 0) && "opacity-50 cursor-not-allowed"
                 )}
             >
                 {isZipping ? (
                     <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Zipping {zipProgress.current}/{zipProgress.total}...
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        Zipping...
                     </>
                 ) : (
                     <>
-                        <Download className="w-4 h-4" />
-                        Download All as ZIP
+                        <Download className="w-3.5 h-3.5" />
+                        Download ZIP
                     </>
                 )}
             </button>
@@ -287,20 +294,20 @@ export function ExportToolbar({ pins, campaignName, csvData, totalCount, isEntir
                 onClick={handleCopyUrls}
                 disabled={completedPins.length === 0}
                 className={cn(
-                    "flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium text-sm transition-all",
+                    "flex items-center gap-2 px-3 py-2 rounded-lg font-medium text-xs transition-all",
                     "bg-white border border-gray-300 text-gray-700 hover:bg-gray-50",
                     completedPins.length === 0 && "opacity-50 cursor-not-allowed"
                 )}
             >
                 {isCopied ? (
                     <>
-                        <Check className="w-4 h-4 text-green-600" />
-                        Copied!
+                        <Check className="w-3.5 h-3.5 text-green-600" />
+                        Copied
                     </>
                 ) : (
                     <>
-                        <Copy className="w-4 h-4" />
-                        Copy All URLs
+                        <Copy className="w-3.5 h-3.5" />
+                        Copy URLs
                     </>
                 )}
             </button>
@@ -310,24 +317,14 @@ export function ExportToolbar({ pins, campaignName, csvData, totalCount, isEntir
                 onClick={handleExportCsv}
                 disabled={!csvData}
                 className={cn(
-                    "flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium text-sm transition-all",
+                    "flex items-center gap-2 px-3 py-2 rounded-lg font-medium text-xs transition-all",
                     "bg-white border border-gray-300 text-gray-700 hover:bg-gray-50",
                     !csvData && "opacity-50 cursor-not-allowed"
                 )}
             >
-                <FileSpreadsheet className="w-4 h-4" />
-                Export CSV with URLs
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                CSV
             </button>
-
-            {/* Stats */}
-            <div className="ml-auto flex flex-col items-end text-sm text-gray-500">
-                <span>{completedPins.length} of {pins.length} loaded pins ready</span>
-                {totalCount !== undefined && totalCount > pins.length && (
-                   <span className="text-xs text-orange-600 animate-pulse font-medium">
-                       ({totalCount - pins.length} more in database - Load more to export)
-                   </span>
-                )}
-            </div>
-        </div>
+        </Container>
     );
 }
