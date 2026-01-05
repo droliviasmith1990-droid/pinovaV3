@@ -24,7 +24,7 @@ interface GenerateRequest {
 interface AsyncGenerateResponse {
     success: true;
     campaign_id: string;
-    status: 'queued';
+    status: 'pending';
     message: string;
     status_url: string;
     meta: {
@@ -129,7 +129,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<AsyncGene
                 user_id: userId,
                 template_id: template.id,
                 name: campaignName,
-                status: 'queueing', // Initial status
+                status: 'pending', // Initial status
                 total_pins: rows.length,
                 generated_pins: 0,
                 csv_data: rows, // Store full data in DB (JSONB)
@@ -150,7 +150,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<AsyncGene
             total: rows.length,
             completed: 0,
             failed: 0,
-            status: 'queueing',
+            status: 'pending',
         });
 
         // 7. Queue Jobs (Batching)
@@ -197,7 +197,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<AsyncGene
         return NextResponse.json({
             success: true,
             campaign_id: campaignId,
-            status: 'queued',
+            status: 'pending',
             message: 'Campaign created and processing started.',
             status_url: statusUrl,
             meta: {
@@ -231,7 +231,7 @@ export async function GET(): Promise<NextResponse> {
         response: {
             success: true,
             campaign_id: 'uuid',
-            status: 'queued',
+            status: 'pending',
             status_url: 'https://.../api/v1/generate/{id}',
         },
     });

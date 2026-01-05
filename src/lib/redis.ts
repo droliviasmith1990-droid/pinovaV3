@@ -192,7 +192,7 @@ export interface CampaignProgress {
     total: number;
     completed: number;
     failed: number;
-    status: 'pending' | 'queueing' | 'processing' | 'completed' | 'failed';
+    status: 'pending' | 'processing' | 'completed' | 'failed';
     startedAt?: string;
     completedAt?: string;
     errors?: string[];
