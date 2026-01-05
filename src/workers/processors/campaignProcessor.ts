@@ -256,6 +256,25 @@ export async function processCampaignBatch(jobData: CampaignJobData) {
     const s3Client = getS3Client();
     const batchResults: any[] = [];
 
+    // 🔍 DEBUG: Inspect Template and Data
+    console.log(`[Worker] 🛠️ DEBUG DATA MAPPING:`);
+    console.log(`[Worker] Field Mapping Keys:`, Object.keys(fieldMapping));
+    console.log(`[Worker] First Row Keys:`, Object.keys(csvRows[0] || {}));
+    if (csvRows.length > 0) {
+        console.log(`[Worker] First Row Sample:`, JSON.stringify(csvRows[0]));
+    }
+    
+    console.log(`[Worker] 🛠️ TEMPLATE ELEMENTS (${elements.length}):`);
+    elements.forEach((el, idx) => {
+        const isDynamic = (el as any).isDynamic;
+        const dynamicSource = (el as any).dynamicSource || (el as any).dynamicField;
+        const textContent = el.type === 'text' ? (el as any).text : 'N/A';
+        console.log(`[Worker] El[${idx}] "${el.name}" (${el.type}): isDynamic=${isDynamic}, Source=${dynamicSource}, Text="${textContent.substring(0, 30)}"`);
+        if (el.type === 'text' && textContent.includes('{{')) {
+            console.log(`[Worker]   -> HAS CURLY BRACES: ${textContent}`);
+        }
+    });
+
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // PHASE 1: Create canvas pool
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
