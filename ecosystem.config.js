@@ -11,7 +11,8 @@ module.exports = {
       max_memory_restart: '1G',
       env: {
         NODE_ENV: 'production',
-        PORT: 3001
+        PORT: 3001,
+        REDIS_URL: 'redis://127.0.0.1:6379'
       }
     },
     {
@@ -23,7 +24,8 @@ module.exports = {
       watch: false,
       max_memory_restart: '1G',
       env: {
-        NODE_ENV: 'production'
+        NODE_ENV: 'production',
+        REDIS_URL: 'redis://127.0.0.1:6379'
       }
     }
   ]
