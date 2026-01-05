@@ -2,8 +2,8 @@ module.exports = {
   apps: [
     {
       name: 'pinterest-app',
-      script: 'node_modules/next/dist/bin/next',
-      args: 'start -H 0.0.0.0',
+      script: 'npm',
+      args: 'start -- -H 0.0.0.0',
       instances: 1,
       exec_mode: 'fork',
       autorestart: true,
