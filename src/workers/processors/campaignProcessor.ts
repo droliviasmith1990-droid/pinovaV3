@@ -33,14 +33,18 @@ declare global {
     var campaignCache: Map<string, CachedCampaignData>;
 }
 
-const getS3Client = () => {
+// OPTIMIZATION: Cache S3 client at module level (Issue #1)
+let _s3Client: S3Client | null = null;
+function getS3Client(): S3Client {
+    if (_s3Client) return _s3Client;
+    
     // Handle TEBI_ENDPOINT with or without https:// prefix
     const rawEndpoint = process.env.TEBI_ENDPOINT || '';
     const endpoint = rawEndpoint.startsWith('https://') || rawEndpoint.startsWith('http://')
         ? rawEndpoint
         : `https://${rawEndpoint}`;
     
-    return new S3Client({
+    _s3Client = new S3Client({
         region: 'auto',
         endpoint,
         credentials: {
@@ -49,7 +53,9 @@ const getS3Client = () => {
         },
         forcePathStyle: true,
     });
-};
+    
+    return _s3Client;
+}
 
 // Upload to S3
 async function uploadToS3(
@@ -162,9 +168,10 @@ export async function processCampaignBatch(jobData: CampaignJobData) {
         let fetchedCsvRows = csvRows || (campaign.csv_data as Record<string, string>[]);
         
         // Download CSV if URL is present (and rows are empty)
-        if ((!fetchedCsvRows || fetchedCsvRows.length === 0) && (campaign as any).csv_url) {
+        const campaignWithCsv = campaign as { csv_url?: string };
+        if ((!fetchedCsvRows || fetchedCsvRows.length === 0) && campaignWithCsv.csv_url) {
             try {
-                const csvUrl = (campaign as any).csv_url;
+                const csvUrl = campaignWithCsv.csv_url;
                 console.log(`[Worker] Downloading CSV from ${csvUrl}`);
                 const response = await fetch(csvUrl);
                 if (response.ok) {
@@ -280,13 +287,13 @@ export async function processCampaignBatch(jobData: CampaignJobData) {
         console.log(`[Worker] Field Mapping Keys:`, Object.keys(fieldMapping));
         console.log(`[Worker] First Row Keys:`, Object.keys(csvRows[0] || {}));
         const csvHeaders = csvRows.length > 0 ? Object.keys(csvRows[0]) : [];
-        elements.forEach((el, idx) => {
-            const isDynamic = (el as any).isDynamic;
-            const dynamicSource = (el as any).dynamicSource || (el as any).dynamicField;
-            if (isDynamic && dynamicSource) {
-                const match = csvHeaders.find(h => h === dynamicSource || h.toLowerCase() === dynamicSource.toLowerCase());
+        elements.forEach((el) => {
+            const elWithDynamic = el as { isDynamic?: boolean; dynamicSource?: string; dynamicField?: string; name: string };
+            if (elWithDynamic.isDynamic && (elWithDynamic.dynamicSource || elWithDynamic.dynamicField)) {
+                const dynamicSource = elWithDynamic.dynamicSource || elWithDynamic.dynamicField;
+                const match = csvHeaders.find(h => h === dynamicSource || h.toLowerCase() === dynamicSource!.toLowerCase());
                 if (!match) {
-                    console.error(`[Worker] MISMATCH: "${el.name}" expects "${dynamicSource}" - NOT FOUND`);
+                    console.error(`[Worker] MISMATCH: "${elWithDynamic.name}" expects "${dynamicSource}" - NOT FOUND`);
                 }
             }
         });
@@ -365,7 +372,8 @@ export async function processCampaignBatch(jobData: CampaignJobData) {
         setServerImageCache(imageCache);
 
         // Render function
-        async function renderSinglePin(rowData: Record<string, string>, pinIndex: number): Promise<Buffer> {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        async function renderSinglePin(rowData: Record<string, string>, _pinIndex: number): Promise<Buffer> {
             const canvas = canvasPool.acquire();
             try {
                 canvas.clear();

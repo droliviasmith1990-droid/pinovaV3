@@ -93,14 +93,30 @@ async function tryScheduleCleanupJob() {
 // Schedule cleanup job with lock
 tryScheduleCleanupJob();
 
-// Graceful shutdown handler
+// Graceful shutdown handler with timeout
+const SHUTDOWN_TIMEOUT = 10000; // 10 seconds
+
 async function gracefulShutdown(signal: string) {
   console.log(`${signal} received, closing workers...`);
-  await Promise.all([
+  
+  // Issue #6 Fix: Add timeout to prevent hanging on worker.close()
+  const shutdownPromise = Promise.all([
     campaignWorker.close(),
     cleanupWorker.close()
   ]);
-  await connection.quit();
+  
+  const timeoutPromise = new Promise<void>((_, reject) => {
+    setTimeout(() => reject(new Error('Shutdown timeout')), SHUTDOWN_TIMEOUT);
+  });
+  
+  try {
+    await Promise.race([shutdownPromise, timeoutPromise]);
+    console.log('Workers closed gracefully');
+  } catch {
+    console.warn('Shutdown timeout reached, forcing exit');
+  }
+  
+  await connection.quit().catch(() => { /* ignore errors on quit */ });
   process.exit(0);
 }
 

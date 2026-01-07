@@ -21,7 +21,8 @@ export const campaignQueue = new Queue('campaign-generation', {
 
 export interface CampaignJobData {
   campaignId: string;
-  elements?: unknown[]; // Using unknown[] to avoid circular dependency issues
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  elements?: any[]; // Using any[] to avoid circular dependency with Element type
   canvasSize?: { width: number; height: number };
   backgroundColor?: string;
   fieldMapping?: Record<string, string>;
@@ -49,25 +50,33 @@ export const cleanupQueue = new Queue('cleanup', { connection });
 export const scheduleCleanupJob = async (externalConnection?: Redis) => {
   // Use the provided connection or fall back to internal one
   const queueConnection = externalConnection || connection;
-  const queue = externalConnection 
+  const isExternalQueue = !!externalConnection;
+  const queue = isExternalQueue 
     ? new Queue('cleanup', { connection: queueConnection })
     : cleanupQueue;
   
-  // Remove any existing repeatable jobs first to avoid duplicates
-  const existingJobs = await queue.getRepeatableJobs();
-  for (const job of existingJobs) {
-    await queue.removeRepeatableByKey(job.key);
+  try {
+    // Remove any existing repeatable jobs first to avoid duplicates
+    const existingJobs = await queue.getRepeatableJobs();
+    for (const job of existingJobs) {
+      await queue.removeRepeatableByKey(job.key);
+    }
+    
+    // Schedule new daily cleanup at midnight
+    await queue.add('storage-cleanup', {}, {
+      repeat: { 
+        pattern: '0 0 * * *' // Daily at midnight (cron format)
+      },
+      removeOnComplete: true,
+      removeOnFail: { count: 10 },
+    });
+    
+    console.log('[Queue] Scheduled daily cleanup job at midnight');
+  } finally {
+    // Issue #3 Fix: Close the temporary queue if we created one to prevent memory leak
+    if (isExternalQueue) {
+      await queue.close();
+    }
   }
-  
-  // Schedule new daily cleanup at midnight
-  await queue.add('storage-cleanup', {}, {
-    repeat: { 
-      pattern: '0 0 * * *' // Daily at midnight (cron format)
-    },
-    removeOnComplete: true,
-    removeOnFail: { count: 10 },
-  });
-  
-  console.log('[Queue] Scheduled daily cleanup job at midnight');
 };
 
