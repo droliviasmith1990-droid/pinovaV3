@@ -69,18 +69,42 @@ cleanupWorker.on('failed', (job, err) => {
     console.error(`[Cleanup ${job?.id}] Failed with error: ${err.message}`);
 });
 
-// Schedule cleanup job on startup
-scheduleCleanupJob().catch(err => {
-  console.error('[Worker] Failed to schedule cleanup job:', err);
-});
+// FIX #1: Use Redis lock to prevent multiple workers from scheduling cleanup jobs
+const CLEANUP_SCHEDULER_LOCK = 'lock:cleanup-scheduler';
+const LOCK_TTL = 60; // 60 seconds - enough time to schedule
 
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-  console.log('SIGTERM received, closing workers...');
+async function tryScheduleCleanupJob() {
+  try {
+    // Try to acquire lock (only one worker will succeed)
+    const acquired = await connection.set(CLEANUP_SCHEDULER_LOCK, process.pid.toString(), 'EX', LOCK_TTL, 'NX');
+    
+    if (acquired === 'OK') {
+      console.log('[Worker] Acquired scheduler lock, scheduling cleanup job...');
+      // FIX #2: Pass our existing connection to avoid creating duplicate Redis connections
+      await scheduleCleanupJob(connection);
+    } else {
+      console.log('[Worker] Another worker is scheduling cleanup job, skipping...');
+    }
+  } catch (err) {
+    console.error('[Worker] Failed to schedule cleanup job:', err);
+  }
+}
+
+// Schedule cleanup job with lock
+tryScheduleCleanupJob();
+
+// Graceful shutdown handler
+async function gracefulShutdown(signal: string) {
+  console.log(`${signal} received, closing workers...`);
   await Promise.all([
     campaignWorker.close(),
     cleanupWorker.close()
   ]);
+  await connection.quit();
   process.exit(0);
-});
+}
+
+// FIX #3: Handle both SIGTERM and SIGINT (Ctrl+C)
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
