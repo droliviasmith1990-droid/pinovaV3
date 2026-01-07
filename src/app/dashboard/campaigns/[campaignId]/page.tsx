@@ -365,9 +365,12 @@ export default function CampaignDetailPage() {
             if (status === 'paused') {
                 updateData.paused_at = new Date().toISOString();
             } else if (status === 'completed') {
-                const now = new Date().toISOString();
-                updateData.completed_at = now;
-                setCompletedAt(now);
+                // FIX: Only set completed_at if not already set (prevents reset on refresh)
+                if (!campaign.completed_at && !completedAt) {
+                    const now = new Date().toISOString();
+                    updateData.completed_at = now;
+                    setCompletedAt(now);
+                }
             }
             const success = await updateCampaign(campaign.id, updateData);
             log('[CampaignPage] Update result:', success);
@@ -375,7 +378,7 @@ export default function CampaignDetailPage() {
                 setCampaign((prev) => prev ? { ...prev, status: status as 'pending' | 'processing' | 'paused' | 'completed' | 'failed' } : null);
             }
         }
-    }, [campaign]);
+    }, [campaign, completedAt]);
 
     // Handle pin preview
     const handlePreview = useCallback((pin: PinCardData) => {
