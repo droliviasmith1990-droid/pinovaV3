@@ -1,9 +1,18 @@
+// Log immediately to diagnose startup delays
+console.log(`[Worker] Starting (PID: ${process.pid}) at ${new Date().toISOString()}`);
+
 import { Worker } from 'bullmq';
 import Redis from 'ioredis';
 import * as dotenv from 'dotenv';
+
+console.log('[Worker] Core imports loaded');
+
+// Defer heavy processor imports until after core setup
 import { processCampaignBatch } from './processors/campaignProcessor';
 import { processCleanup } from './processors/cleanupProcessor';
 import { scheduleCleanupJob } from '../lib/queue';
+
+console.log('[Worker] All imports loaded');
 
 // Load environment variables
 dotenv.config();
@@ -18,14 +27,16 @@ console.log(`🔌 Redis: ${connectionStr.replace(/:[^@]+@/, ':***@')}`);
 
 // Campaign generation worker
 const campaignWorker = new Worker('campaign-generation', async (job) => {
+  const startTime = Date.now();
   console.log(`[Campaign ${job.id}] Started - Campaign: ${job.data.campaignId}, Index: ${job.data.startIndex}`);
   
   try {
     const result = await processCampaignBatch(job.data);
+    console.log(`[Campaign ${job.id}] Completed in ${Date.now() - startTime}ms`);
     return result;
   } catch (err) {
     const error = err as Error;
-    console.error(`[Campaign ${job.id}] Failed:`, error);
+    console.error(`[Campaign ${job.id}] Failed after ${Date.now() - startTime}ms:`, error);
     throw error;
   }
 }, { 
@@ -123,4 +134,3 @@ async function gracefulShutdown(signal: string) {
 // FIX #3: Handle both SIGTERM and SIGINT (Ctrl+C)
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-
