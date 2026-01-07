@@ -6,6 +6,17 @@ import { setupFabricServerPolyfills } from '@/lib/fabric/server-polyfill';
 import { createServiceRoleClient } from "@/lib/supabaseServer";
 import { incrementProgress } from "@/lib/redis";
 import { CampaignJobData } from '@/lib/queue';
+import * as os from 'os';
+
+// OPTIMIZATION: Cache Supabase client at module level
+let _supabase: ReturnType<typeof createServiceRoleClient> | null = null;
+function getSupabase() {
+    if (!_supabase) _supabase = createServiceRoleClient();
+    return _supabase;
+}
+
+// Debug flag - disable in production for performance
+const DEBUG = process.env.NODE_ENV !== 'production' && process.env.WORKER_DEBUG === 'true';
 
 // Initialize S3 Client for Tebi
 interface CachedCampaignData {
@@ -15,6 +26,7 @@ interface CachedCampaignData {
     backgroundColor: string;
     csvRows: Record<string, string>[];
     fieldMapping: Record<string, string>;
+    userId: string; // OPTIMIZATION: Cache userId to avoid extra DB query
 }
 
 declare global {
@@ -89,7 +101,7 @@ export async function processCampaignBatch(jobData: CampaignJobData) {
         throw new Error("Missing required field: campaignId");
     }
 
-    const supabase = createServiceRoleClient();
+    const supabase = getSupabase();
     
     // 1. Fetch Campaign and Template Data if missing
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -113,12 +125,14 @@ export async function processCampaignBatch(jobData: CampaignJobData) {
     const cached = global.campaignCache.get(campaignId);
     let usedCache = false;
 
+    let userId = '';
     if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
         if (!elements) elements = cached.elements;
         if (!canvasSize) canvasSize = cached.canvasSize;
         if (!backgroundColor) backgroundColor = cached.backgroundColor;
         if (!csvRows) csvRows = cached.csvRows;
         if (!fieldMapping) fieldMapping = cached.fieldMapping;
+        userId = cached.userId; // OPTIMIZATION: Get userId from cache
         usedCache = true;
     }
 
@@ -183,17 +197,21 @@ export async function processCampaignBatch(jobData: CampaignJobData) {
                 throw new Error("Template linked to campaign not found");
         }
 
-        // Update Cache
-        if (elements && canvasSize && csvRows && fieldMapping) {
+        // OPTIMIZATION: Extract userId from the same query (already fetched)
+        userId = campaign.user_id;
+
+        // Update Cache (including userId)
+        if (elements && canvasSize && csvRows && fieldMapping && userId) {
             global.campaignCache.set(campaignId, {
                 timestamp: Date.now(),
                 elements,
                 canvasSize,
                 backgroundColor: backgroundColor || '#ffffff',
                 csvRows,
-                fieldMapping
+                fieldMapping,
+                userId
             });
-            console.log(`[Worker] Cached campaign data for ${campaignId} (${csvRows.length} rows)`);
+            if (DEBUG) console.log(`[Worker] Cached campaign data for ${campaignId} (${csvRows.length} rows)`);
         }
     }
 
@@ -216,18 +234,19 @@ export async function processCampaignBatch(jobData: CampaignJobData) {
     if (!fieldMapping) fieldMapping = {};
     if (!backgroundColor) backgroundColor = '#ffffff';
     
-    // Fetch userId if needed
-    let userId = '';
-    const { data: campaignUser, error: userError } = await supabase
-        .from('campaigns')
-        .select('user_id')
-        .eq('id', campaignId)
-        .single();
-        
-    if (userError || !campaignUser) {
-        throw new Error("User ID not found");
+    // OPTIMIZATION: Only fetch userId if not already obtained from cache/query
+    if (!userId) {
+        const { data: campaignUser, error: userError } = await supabase
+            .from('campaigns')
+            .select('user_id')
+            .eq('id', campaignId)
+            .single();
+            
+        if (userError || !campaignUser) {
+            throw new Error("User ID not found");
+        }
+        userId = campaignUser.user_id;
     }
-    userId = campaignUser.user_id;
 
     // 2. Perform Rendering
     
@@ -251,60 +270,41 @@ export async function processCampaignBatch(jobData: CampaignJobData) {
     
     const preparedElements = await prepareElementsForServerRendering(elements, supabaseUrl, supabaseKey);
 
-    console.log(`[Worker] [DEBUG-ID-999] Processing batch of ${csvRows.length} pins for campaign ${campaignId}`);
+    if (DEBUG) console.log(`[Worker] Processing batch of ${csvRows.length} pins for campaign ${campaignId}`);
 
     const s3Client = getS3Client();
-    const batchResults: any[] = [];
+    const batchResults: { index: number; success: boolean; url?: string; error?: string; rowData: Record<string, string> }[] = [];
 
-    // 🔍 DEBUG: Inspect Template and Data
-    console.log(`[Worker] 🛠️ DEBUG DATA MAPPING:`);
-    console.log(`[Worker] Field Mapping Keys:`, Object.keys(fieldMapping));
-    console.log(`[Worker] First Row Keys:`, Object.keys(csvRows[0] || {}));
-    if (csvRows.length > 0) {
-        console.log(`[Worker] First Row Sample:`, JSON.stringify(csvRows[0]));
-    }
-    
-    console.log(`[Worker] 🛠️ TEMPLATE ELEMENTS (${elements.length}):`);
-    
-    // Check for Header Mismatches
-    const csvHeaders = csvRows.length > 0 ? Object.keys(csvRows[0]) : [];
-    console.error(`[Worker] 🚨 CSV HEADERS AVAILABLE:`, JSON.stringify(csvHeaders));
-
-    elements.forEach((el, idx) => {
-        const isDynamic = (el as any).isDynamic;
-        const dynamicSource = (el as any).dynamicSource || (el as any).dynamicField;
-        
-        if (isDynamic && dynamicSource) {
-            // Check if this source exists in CSV
-            const match = csvHeaders.find(h => h === dynamicSource) || 
-                          csvHeaders.find(h => h.toLowerCase() === dynamicSource.toLowerCase()) ||
-                          csvHeaders.find(h => h.trim() === dynamicSource.trim());
-            
-            if (!match) {
-                 console.error(`[Worker] ❌ MISMATCH: Element "${el.name}" expects "${dynamicSource}" but NOT FOUND in CSV headers.`);
-            } else {
-                 console.log(`[Worker] ✅ MATCH: Element "${el.name}" source "${dynamicSource}" maps to CSV column "${match}"`);
+    // Debug logging (only when DEBUG is enabled)
+    if (DEBUG) {
+        console.log(`[Worker] Field Mapping Keys:`, Object.keys(fieldMapping));
+        console.log(`[Worker] First Row Keys:`, Object.keys(csvRows[0] || {}));
+        const csvHeaders = csvRows.length > 0 ? Object.keys(csvRows[0]) : [];
+        elements.forEach((el, idx) => {
+            const isDynamic = (el as any).isDynamic;
+            const dynamicSource = (el as any).dynamicSource || (el as any).dynamicField;
+            if (isDynamic && dynamicSource) {
+                const match = csvHeaders.find(h => h === dynamicSource || h.toLowerCase() === dynamicSource.toLowerCase());
+                if (!match) {
+                    console.error(`[Worker] MISMATCH: "${el.name}" expects "${dynamicSource}" - NOT FOUND`);
+                }
             }
-        }
-
-        const textContent = el.type === 'text' ? (el as any).text : 'N/A';
-        console.log(`[Worker] El[${idx}] "${el.name}" (${el.type}): isDynamic=${isDynamic}, Source=${dynamicSource}, Text="${textContent.substring(0, 30)}"`);
-        if (el.type === 'text' && textContent.includes('{{')) {
-            console.log(`[Worker]   -> HAS CURLY BRACES: ${textContent}`);
-        }
-    });
+        });
+    }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // PHASE 1: Create canvas pool
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // With 3 PM2 workers, 2 parallel tasks per worker = 6 total concurrent tasks
-    // This effectively saturates 4 vCPUs without thrashing
-    const PARALLEL_LIMIT = 2; 
+    // OPTIMIZATION: Scale parallel limit based on CPU cores (min 2, max 6)
+    const PARALLEL_LIMIT = Math.max(2, Math.min(os.cpus().length, 6)); 
     const canvasPool = new CanvasPool({
         maxSize: PARALLEL_LIMIT,
         defaultWidth: canvasSize!.width,
         defaultHeight: canvasSize!.height
     });
+    
+    // OPTIMIZATION: Pre-warm canvas pool
+    canvasPool.prewarm(PARALLEL_LIMIT, canvasSize!.width, canvasSize!.height);
 
     try {
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -36,3 +36,29 @@ export const addCampaignJob = async (data: CampaignJobData) => {
     removeOnFail: { count: 100 }, // Keep last 100 failed jobs for debugging
   });
 };
+
+// Cleanup queue for scheduled maintenance tasks
+export const cleanupQueue = new Queue('cleanup', { connection });
+
+/**
+ * Schedule the daily cleanup job (runs at midnight)
+ * Call this once on worker startup
+ */
+export const scheduleCleanupJob = async () => {
+  // Remove any existing repeatable jobs first to avoid duplicates
+  const existingJobs = await cleanupQueue.getRepeatableJobs();
+  for (const job of existingJobs) {
+    await cleanupQueue.removeRepeatableByKey(job.key);
+  }
+  
+  // Schedule new daily cleanup at midnight
+  await cleanupQueue.add('storage-cleanup', {}, {
+    repeat: { 
+      pattern: '0 0 * * *' // Daily at midnight (cron format)
+    },
+    removeOnComplete: true,
+    removeOnFail: { count: 10 },
+  });
+  
+  console.log('[Queue] Scheduled daily cleanup job at midnight');
+};

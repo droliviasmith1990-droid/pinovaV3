@@ -2,6 +2,8 @@ import { Worker } from 'bullmq';
 import Redis from 'ioredis';
 import * as dotenv from 'dotenv';
 import { processCampaignBatch } from './processors/campaignProcessor';
+import { processCleanup } from './processors/cleanupProcessor';
+import { scheduleCleanupJob } from '../lib/queue';
 
 // Load environment variables
 dotenv.config();
@@ -12,41 +14,73 @@ const connection = new Redis(connectionStr, {
 });
 
 console.log('🚀 Worker started. Listening for jobs...');
-console.log('!!! WORKER RELOADED - VERSION 100 !!!');
-console.log(`🔌 Redis: ${connectionStr.replace(/:[^@]+@/, ':***@')}`); // Shield password in logs
+console.log(`🔌 Redis: ${connectionStr.replace(/:[^@]+@/, ':***@')}`);
 
-const worker = new Worker('campaign-generation', async (job) => {
-  console.log(`[Job ${job.id}] Started - Campaign: ${job.data.campaignId}, Index: ${job.data.startIndex}`);
+// Campaign generation worker
+const campaignWorker = new Worker('campaign-generation', async (job) => {
+  console.log(`[Campaign ${job.id}] Started - Campaign: ${job.data.campaignId}, Index: ${job.data.startIndex}`);
   
   try {
     const result = await processCampaignBatch(job.data);
     return result;
   } catch (err) {
     const error = err as Error;
-    console.error(`[Job ${job.id}] Failed:`, error);
+    console.error(`[Campaign ${job.id}] Failed:`, error);
     throw error;
   }
 }, { 
   connection, 
-  concurrency: 1, // 1 batch per process (3 processes total = 3 concurrent batches)
-  lockDuration: 300000, // 5 minutes lock
-  // OPTIMIZATION: Reduce Redis chatter
-  // Check for stalled jobs every 2 minutes instead of 30 seconds
+  concurrency: 1,
+  lockDuration: 300000,
   stalledInterval: 120000, 
-  // Max retries per job is handled in queue.add, but fail immediately if processing fails to avoid zombie loops
 });
 
-worker.on('completed', job => {
-    console.log(`[Job ${job.id}] Completed successfully!`);
+campaignWorker.on('completed', job => {
+    console.log(`[Campaign ${job.id}] Completed successfully!`);
 });
 
-worker.on('failed', (job, err) => {
-    console.error(`[Job ${job?.id}] Failed with error: ${err.message}`);
+campaignWorker.on('failed', (job, err) => {
+    console.error(`[Campaign ${job?.id}] Failed with error: ${err.message}`);
+});
+
+// Cleanup worker (for scheduled maintenance)
+const cleanupWorker = new Worker('cleanup', async (job) => {
+  console.log(`[Cleanup ${job.id}] Starting storage cleanup...`);
+  
+  try {
+    const result = await processCleanup();
+    console.log(`[Cleanup ${job.id}] Completed: ${result.cleaned} files cleaned`);
+    return result;
+  } catch (err) {
+    const error = err as Error;
+    console.error(`[Cleanup ${job.id}] Failed:`, error);
+    throw error;
+  }
+}, { 
+  connection,
+  concurrency: 1,
+});
+
+cleanupWorker.on('completed', job => {
+    console.log(`[Cleanup ${job.id}] Completed successfully!`);
+});
+
+cleanupWorker.on('failed', (job, err) => {
+    console.error(`[Cleanup ${job?.id}] Failed with error: ${err.message}`);
+});
+
+// Schedule cleanup job on startup
+scheduleCleanupJob().catch(err => {
+  console.error('[Worker] Failed to schedule cleanup job:', err);
 });
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
-  console.log('SIGTERM received, closing worker...');
-  await worker.close();
+  console.log('SIGTERM received, closing workers...');
+  await Promise.all([
+    campaignWorker.close(),
+    cleanupWorker.close()
+  ]);
   process.exit(0);
 });
+

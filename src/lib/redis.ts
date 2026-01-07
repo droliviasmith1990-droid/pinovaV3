@@ -263,6 +263,30 @@ export async function getProgress(campaignId: string): Promise<CampaignProgress 
     }
 }
 
+// Lua script for atomic increment + completion check
+// Returns: 0 = not complete, 1 = complete (success), 2 = complete (with failures)
+const INCREMENT_AND_CHECK_SCRIPT = `
+local key = KEYS[1]
+local field = ARGV[1]
+local amount = tonumber(ARGV[2])
+
+redis.call('HINCRBY', key, field, amount)
+
+local total = tonumber(redis.call('HGET', key, 'total') or 0)
+local completed = tonumber(redis.call('HGET', key, 'completed') or 0)
+local failed = tonumber(redis.call('HGET', key, 'failed') or 0)
+local status = redis.call('HGET', key, 'status')
+
+if total > 0 and (completed + failed) >= total then
+    if status ~= 'completed' and status ~= 'failed' then
+        local newStatus = failed > 0 and 'failed' or 'completed'
+        redis.call('HSET', key, 'status', newStatus, 'completedAt', ARGV[3])
+        return failed > 0 and 2 or 1
+    end
+end
+return 0
+`;
+
 export async function incrementProgress(
     campaignId: string,
     field: 'completed' | 'failed',
@@ -273,29 +297,17 @@ export async function incrementProgress(
     
     try {
         const key = `progress:${campaignId}`;
+        const timestamp = new Date().toISOString();
         
-        await redis.hincrby(key, field, amount);
-        
-        // Fetch status to check for completion
-        const data = await redis.hgetall(key);
-        
-        if (!data || Object.keys(data).length === 0) return;
-
-        const totalNum = Number(data.total) || 0;
-        const completedNum = Number(data.completed) || 0;
-        const failedNum = Number(data.failed) || 0;
-        
-        if (totalNum > 0 && (completedNum + failedNum >= totalNum)) {
-            const currentStatus = data.status;
-            if (currentStatus !== 'completed' && currentStatus !== 'failed') {
-                 const newStatus = failedNum > 0 ? 'failed' : 'completed';
-                 await redis.hset(key, { 
-                     status: newStatus, 
-                     completedAt: new Date().toISOString() 
-                 });
-            }
-        }
-        
+        // OPTIMIZATION: Single atomic operation instead of HINCRBY + HGETALL + conditional HSET
+        await redis.eval(
+            INCREMENT_AND_CHECK_SCRIPT,
+            1,
+            key,
+            field,
+            amount,
+            timestamp
+        );
     } catch (error) {
         console.error(`[Progress] Failed to increment ${field} for ${campaignId}:`, error);
     }
