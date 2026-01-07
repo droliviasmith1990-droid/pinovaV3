@@ -18,6 +18,7 @@ import {
 import { cn } from '@/lib/utils';
 import { TemplateListItem } from '@/lib/db/templates';
 import { DynamicDataSummary } from '@/lib/utils/extractDynamicData';
+import { getCacheBustedThumbnailUrl } from '@/lib/utils/thumbnailUrl';
 
 interface TemplateCardProps {
     template: TemplateListItem;
@@ -91,7 +92,7 @@ export function TemplateCard({
                 {/* Thumbnail Image */}
                 {template.thumbnail_url ? (
                     <Image
-                        src={template.thumbnail_url}
+                        src={getCacheBustedThumbnailUrl(template.thumbnail_url, template.updated_at) || template.thumbnail_url}
                         alt={template.name}
                         fill
                         className="object-cover"

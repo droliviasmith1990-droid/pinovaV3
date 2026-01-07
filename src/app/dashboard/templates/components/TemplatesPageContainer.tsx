@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 
-import { TemplateListItem, TemplateWithElements, deleteTemplate, duplicateTemplate, updateTemplateMetadata } from '@/lib/db/templates';
+import { TemplateListItem, deleteTemplate, duplicateTemplate, updateTemplateMetadata } from '@/lib/db/templates';
 import { useTemplatesWithElements } from '@/hooks/useTemplates';
 import { extractDynamicData, DynamicDataSummary, DynamicDataFilter, matchesDynamicDataFilter } from '@/lib/utils/extractDynamicData';
 
@@ -47,7 +47,7 @@ export function TemplatesPageContainer() {
     }), [selectedCategoryId, selectedTagIds, searchQuery, isFeatured]);
 
     // Data Fetching with Caching
-    const { data: templates = [], isLoading, refetch } = useTemplatesWithElements(filters);
+    const { data: templates = [], isLoading, invalidateAndRefetch } = useTemplatesWithElements(filters);
     
     // Derived State: Dynamic Data Map
     const dynamicDataMap = useMemo(() => {
@@ -59,8 +59,14 @@ export function TemplatesPageContainer() {
         return dataMap;
     }, [templates]);
 
-    // Alias for backward compatibility with existing handlers
-    const fetchTemplates = refetch;
+    // Use invalidateAndRefetch for manual refresh (bypasses cache)
+    const handleRefresh = useCallback(async () => {
+        await invalidateAndRefetch();
+        toast.success('Templates refreshed');
+    }, [invalidateAndRefetch]);
+    
+    // Alias for backward compatibility
+    const fetchTemplates = handleRefresh;
     
     // Load view preference from localStorage
     useEffect(() => {

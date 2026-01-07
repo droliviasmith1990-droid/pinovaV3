@@ -26,6 +26,7 @@ import { useTagStore } from '@/stores/tagStore';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { generateId } from '@/lib/utils';
 import { DbCategory, DbTag } from '@/types/database.types';
+import { getCacheBustedThumbnailUrl } from '@/lib/utils/thumbnailUrl';
 
 // Import all Lucide icons for dynamic category icons
 import * as LucideIcons from 'lucide-react';
@@ -84,7 +85,7 @@ function TemplateCard({ template, onUse, isLoading, categories }: TemplateCardPr
             <div className="aspect-2/3 bg-gradient-to-br from-pink-400 via-purple-400 to-blue-500 relative">
                 {template.thumbnail_url ? (
                     <img
-                        src={template.thumbnail_url}
+                        src={getCacheBustedThumbnailUrl(template.thumbnail_url, template.updated_at) || template.thumbnail_url}
                         alt={template.name}
                         className="w-full h-full object-cover"
                     />

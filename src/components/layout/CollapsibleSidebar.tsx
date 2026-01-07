@@ -8,8 +8,6 @@ import {
   ChevronRight,
   ChevronDown,
   LayoutDashboard,
-  Brush,
-  Sparkles,
   FileStack,
   Megaphone,
   FolderOpen,
@@ -52,12 +50,12 @@ interface NavSectionProps {
 }
 
 export function CollapsibleSidebar() {
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(true);
   
   return (
     <aside 
       className={cn(
-        "bg-white border-r border-gray-200 transition-all duration-300 flex flex-col h-screen sticky top-0",
+        "bg-white border-r border-gray-200 transition-all duration-300 flex flex-col h-screen sticky top-0 shrink-0",
         isCollapsed ? "w-16" : "w-64"
       )}
     >
@@ -133,17 +131,7 @@ export function CollapsibleSidebar() {
             icon={<Home className="w-5 h-5" />}
             isCollapsed={isCollapsed}
             items={[
-              { icon: <LayoutDashboard className="w-5 h-5" />, label: "Dashboard", href: "/dashboard", badge: "3" }
-            ]}
-          />
-
-          {/* Create Section */}
-          <NavSection
-            title="CREATE"
-            isCollapsed={isCollapsed}
-            items={[
-              { icon: <Brush className="w-5 h-5" />, label: "Template Editor", href: "/editor" },
-              { icon: <Sparkles className="w-5 h-5" />, label: "New Campaign", href: "/dashboard/campaigns/new" }
+              { icon: <LayoutDashboard className="w-5 h-5" />, label: "Dashboard", href: "/dashboard" }
             ]}
           />
 
@@ -152,8 +140,8 @@ export function CollapsibleSidebar() {
             title="LIBRARY"
             isCollapsed={isCollapsed}
             items={[
-              { icon: <FileStack className="w-5 h-5" />, label: "My Templates", href: "/dashboard/templates", count: 12 },
-              { icon: <Megaphone className="w-5 h-5" />, label: "Campaigns", href: "/dashboard/campaigns", count: 4, active: true },
+              { icon: <FileStack className="w-5 h-5" />, label: "My Templates", href: "/dashboard/templates" },
+              { icon: <Megaphone className="w-5 h-5" />, label: "Campaigns", href: "/dashboard/campaigns" },
               { icon: <Key className="w-5 h-5" />, label: "API Keys", href: "/dashboard/api-keys" },
               { icon: <Type className="w-5 h-5" />, label: "Fonts", href: "/dashboard/fonts" },
               { icon: <FolderOpen className="w-5 h-5" />, label: "Categories", href: "/dashboard/categories" },

@@ -6,6 +6,7 @@ import { Check, Star, ImageIcon, Type, Layout, Folder } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { TemplateListItem } from '@/lib/db/templates';
 import { DynamicDataSummary } from '@/lib/utils/extractDynamicData';
+import { getCacheBustedThumbnailUrl } from '@/lib/utils/thumbnailUrl';
 
 interface CompactTemplateCardProps {
     template: TemplateListItem;
@@ -38,7 +39,7 @@ export const CompactTemplateCard = memo(function CompactTemplateCard({
             <div className="relative aspect-2/3 bg-gray-100 overflow-hidden">
                 {template.thumbnail_url ? (
                     <Image
-                        src={template.thumbnail_url}
+                        src={getCacheBustedThumbnailUrl(template.thumbnail_url, template.updated_at) || template.thumbnail_url}
                         alt={template.name}
                         fill
                         loading="lazy"

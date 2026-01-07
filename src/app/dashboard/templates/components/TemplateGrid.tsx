@@ -9,6 +9,7 @@ import { TemplateListItem } from '@/lib/db/templates';
 import { DynamicDataSummary } from '@/lib/utils/extractDynamicData';
 import { TemplateCard } from './TemplateCard';
 import { ViewMode } from './TemplateToolbar';
+import { getCacheBustedThumbnailUrl } from '@/lib/utils/thumbnailUrl';
 
 interface TemplateGridProps {
     templates: TemplateListItem[];
@@ -102,7 +103,7 @@ function TemplateRow({
             <div className="w-12 h-12 rounded-lg overflow-hidden bg-gray-200 shrink-0 relative">
                 {template.thumbnail_url ? (
                     <Image
-                        src={template.thumbnail_url}
+                        src={getCacheBustedThumbnailUrl(template.thumbnail_url, template.updated_at) || template.thumbnail_url}
                         alt={template.name}
                         fill
                         className="object-cover"

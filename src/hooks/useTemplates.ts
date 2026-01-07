@@ -43,16 +43,30 @@ export function useTemplates() {
  * Optimized with React Query caching
  */
 export function useTemplatesWithElements(filters?: TemplateFilters) {
-    return useQuery({
+    const queryClient = useQueryClient();
+    
+    const query = useQuery({
         queryKey: templateKeys.withElements(filters),
         queryFn: async () => {
             if (!isSupabaseConfigured()) return [];
             return getTemplatesWithElements(filters);
         },
         enabled: isSupabaseConfigured(),
-        staleTime: 1000 * 60 * 5, // Cache for 5 minutes (heavy data)
+        staleTime: 1000 * 60 * 2, // Reduced to 2 minutes for fresher data
         gcTime: 1000 * 60 * 30,   // Keep in memory for 30 minutes
     });
+    
+    // Force invalidation function for manual refresh
+    const invalidateAndRefetch = async () => {
+        // Invalidate all template queries to force fresh fetch
+        await queryClient.invalidateQueries({ queryKey: templateKeys.all });
+        return query.refetch();
+    };
+    
+    return {
+        ...query,
+        invalidateAndRefetch,
+    };
 }
 
 /**

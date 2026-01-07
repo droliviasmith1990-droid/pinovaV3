@@ -3,6 +3,7 @@ import Image from 'next/image';
 import { Check, Star, Layout } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { TemplateListItem } from '@/lib/db/templates';
+import { getCacheBustedThumbnailUrl } from '@/lib/utils/thumbnailUrl';
 
 interface SelectableTemplateCardProps {
     template: TemplateListItem;
@@ -27,7 +28,7 @@ export function SelectableTemplateCard({ template, isSelected, onSelect }: Selec
             <div className="relative aspect-2/3 bg-gray-100 dark:bg-gray-800 overflow-hidden">
                 {template.thumbnail_url ? (
                     <Image
-                        src={template.thumbnail_url}
+                        src={getCacheBustedThumbnailUrl(template.thumbnail_url, template.updated_at) || template.thumbnail_url}
                         alt={template.name}
                         fill
                         className={cn(
