@@ -17,16 +17,22 @@ module.exports = {
     },
     {
       name: 'pinterest-worker',
-      script: 'node_modules/.bin/tsx', // Use local tsx
+      script: 'node_modules/.bin/tsx',
       args: 'src/workers/index.ts',
-      instances: 1, // Keep to 1 to save Redis connections
+      instances: 4,
+      exec_mode: 'cluster',
       autorestart: true,
       watch: false,
       max_memory_restart: '1G',
+      // Fix PM2 logging with tsx - force unbuffered output
+      merge_logs: false,
+      out_file: '/root/.pm2/logs/pinterest-worker-out.log',
+      error_file: '/root/.pm2/logs/pinterest-worker-error.log',
       env: {
         NODE_ENV: 'production',
         REDIS_URL: 'redis://127.0.0.1:6379',
-        DEBUG_RENDER: 'true'
+        // Reduce logging noise
+        CANVAS_POOL_DEBUG: 'false'
       }
     }
   ]

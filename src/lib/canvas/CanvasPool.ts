@@ -18,6 +18,9 @@
 
 import * as fabric from 'fabric';
 
+// Debug logging - disabled by default in production
+const DEBUG = process.env.CANVAS_POOL_DEBUG === 'true';
+
 export interface CanvasPoolOptions {
     /** Maximum number of canvases to keep in pool (default: 5) */
     maxSize?: number;
@@ -58,7 +61,7 @@ export class CanvasPool {
         if (existingIndex >= 0) {
             // Reuse existing canvas with matching dimensions
             const canvas = this.pool.splice(existingIndex, 1)[0];
-            console.log(`[CanvasPool] Reused canvas ${targetWidth}x${targetHeight} (pool: ${this.pool.length})`);
+            if (DEBUG) console.log(`[CanvasPool] Reused canvas ${targetWidth}x${targetHeight} (pool: ${this.pool.length})`);
             return canvas;
         }
 
@@ -66,13 +69,13 @@ export class CanvasPool {
             // Reuse any canvas and resize
             const canvas = this.pool.pop()!;
             canvas.setDimensions({ width: targetWidth, height: targetHeight });
-            console.log(`[CanvasPool] Resized canvas to ${targetWidth}x${targetHeight} (pool: ${this.pool.length})`);
+            if (DEBUG) console.log(`[CanvasPool] Resized canvas to ${targetWidth}x${targetHeight} (pool: ${this.pool.length})`);
             return canvas;
         }
 
         // Create new canvas
         this.stats.created++;
-        console.log(`[CanvasPool] Created new canvas ${targetWidth}x${targetHeight}`);
+        if (DEBUG) console.log(`[CanvasPool] Created new canvas ${targetWidth}x${targetHeight}`);
         return new fabric.StaticCanvas(undefined, {
             width: targetWidth,
             height: targetHeight,
@@ -112,12 +115,12 @@ export class CanvasPool {
 
         if (this.pool.length < this.maxSize) {
             this.pool.push(canvas);
-            console.log(`[CanvasPool] Returned canvas to pool (pool: ${this.pool.length})`);
+            if (DEBUG) console.log(`[CanvasPool] Returned canvas to pool (pool: ${this.pool.length})`);
         } else {
             // Pool is full, dispose this canvas
             this.stats.disposed++;
             canvas.dispose();
-            console.log(`[CanvasPool] Pool full, disposed canvas`);
+            if (DEBUG) console.log(`[CanvasPool] Pool full, disposed canvas`);
         }
     }
 
@@ -140,14 +143,14 @@ export class CanvasPool {
             this.stats.created++;
         }
 
-        console.log(`[CanvasPool] Pre-warmed ${toCreate} canvases (pool: ${this.pool.length})`);
+        console.log(`[CanvasPool] Pre-warmed ${toCreate} canvases`);
     }
 
     /**
      * Drain the pool, disposing all canvases
      */
     drain(): void {
-        console.log(`[CanvasPool] Draining ${this.pool.length} canvases`);
+        if (DEBUG) console.log(`[CanvasPool] Draining ${this.pool.length} canvases`);
         this.pool.forEach(canvas => {
             canvas.dispose();
             this.stats.disposed++;
