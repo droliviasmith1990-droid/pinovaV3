@@ -23,6 +23,11 @@ interface AutoFitConfig {
     overline?: boolean;
     objectCaching?: boolean;
     
+    // Stroke properties - CRITICAL for accurate measurement
+    // Text with stroke takes more space than text without
+    stroke?: string;
+    strokeWidth?: number;
+    
     // Context for server-side rendering (avoids DOM dependency)
     fabricContext?: any; 
 }
@@ -91,9 +96,19 @@ export function calculateBestFitFontSize(
 
     // 2. Create temporary textbox for measurement
     // We clone properties carefully to ensure accurate measurement
-    // SAFETY BUFFER: Reduce available space slightly to prevent edge-case overflows due to sub-pixel rendering differences
+    
+    // SAFETY BUFFERS:
+    // - Base buffer: 2px for sub-pixel rendering differences
+    // - Server buffer: Additional 10% for node-canvas vs browser font rendering differences
+    //   node-canvas often renders fonts slightly larger than browsers
     const SAFETY_BUFFER_X = 2; // px
-    const SAFETY_BUFFER_Y = 2; // px
+    const BASE_SAFETY_BUFFER_Y = 2; // px
+    
+    // Apply stricter height constraint on server to absorb rendering differences
+    const isServerSide = !!config.fabricContext;
+    const SERVER_HEIGHT_BUFFER_PERCENT = 0.10; // 10% stricter on server
+    const serverHeightReduction = isServerSide ? targetHeight * SERVER_HEIGHT_BUFFER_PERCENT : 0;
+    const effectiveTargetHeight = Math.max(1, targetHeight - BASE_SAFETY_BUFFER_Y - serverHeightReduction);
 
     const tempText = new TextboxClass(text, {
         width: Math.max(1, targetWidth - SAFETY_BUFFER_X), // Ensure wrapped slightly earlier
@@ -110,6 +125,10 @@ export function calculateBestFitFontSize(
         linethrough: config.linethrough,
         overline: config.overline,
         objectCaching: config.objectCaching,
+        // Stroke properties - CRITICAL for accurate measurement
+        // Text with stroke effectively takes more visual space
+        stroke: config.stroke,
+        strokeWidth: config.strokeWidth || 0,
     });
 
     /**
@@ -124,8 +143,8 @@ export function calculateBestFitFontSize(
         
         const textHeight = tempText.height || 0;
         
-        // Hard Height Constraint (with safety buffer)
-        if (textHeight > Math.max(1, targetHeight - SAFETY_BUFFER_Y)) {
+        // Hard Height Constraint (using effectiveTargetHeight which includes server buffer)
+        if (textHeight > effectiveTargetHeight) {
             return false;
         }
         

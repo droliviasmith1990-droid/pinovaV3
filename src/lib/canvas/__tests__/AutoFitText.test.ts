@@ -19,23 +19,25 @@ describe('AutoFitText', () => {
 
         it('should return maxFontSize for short text that fits easily', () => {
             // Constraint height must be > fontSize * lineHeight (100 * 1.2 = 120)
-            const size = calculateBestFitFontSize('Hello', 200, 150, baseConfig);
+            const result = calculateBestFitFontSize('Hello', 200, 150, baseConfig);
             // It should maximize the size up to maxFontSize
-            expect(size).toBe(100);
+            expect(result.fontSize).toBe(100);
         });
 
         it('should reduce font size for long text', () => {
             const longText = 'This is a very long text that definitely needs to wrap multiple lines to fit in the box';
-            const size = calculateBestFitFontSize(longText, 100, 100, baseConfig);
-            expect(size).toBeLessThan(100);
-            expect(size).toBeGreaterThanOrEqual(10);
+            const result = calculateBestFitFontSize(longText, 100, 100, baseConfig);
+            expect(result.fontSize).toBeLessThan(100);
+            expect(result.fontSize).toBeGreaterThanOrEqual(10);
         });
 
-        it('should respect minFontSize even if text overflows', () => {
+        it('should shrink below minFontSize if needed to fit (Emergency Shrink)', () => {
             // Use words so it wraps
             const hugeText = 'Word '.repeat(1000);
-            const size = calculateBestFitFontSize(hugeText, 50, 50, baseConfig);
-            expect(size).toBe(10); // Should be floor at min
+            const result = calculateBestFitFontSize(hugeText, 50, 50, baseConfig);
+            // Algorithm uses Emergency Shrink (Phase 3) to go below minFontSize down to HARD_FLOOR (6px)
+            expect(result.fontSize).toBeGreaterThanOrEqual(6);
+            expect(result.fontSize).toBeLessThanOrEqual(10);
         });
 
         it('should respect maxLines constraint', () => {
@@ -61,19 +63,20 @@ describe('AutoFitText', () => {
             const narrowWidth = 50; 
             const tallHeight = 200;
             // Naturally this would wrap to many lines to use larger font.
-            const sizeWrapped = calculateBestFitFontSize(wrapText, narrowWidth, tallHeight, baseConfig);
+            const resultWrapped = calculateBestFitFontSize(wrapText, narrowWidth, tallHeight, baseConfig);
             
             // Now constrain to 1 line
-            const size1Line = calculateBestFitFontSize(wrapText, narrowWidth, tallHeight, { ...baseConfig, maxLines: 1, minFontSize: 2 });
+            const result1Line = calculateBestFitFontSize(wrapText, narrowWidth, tallHeight, { ...baseConfig, maxLines: 1, minFontSize: 2 });
             
             // The 1-line version must be much smaller to fit in 50px width
-            expect(size1Line).toBeLessThan(sizeWrapped);
+            expect(result1Line.fontSize).toBeLessThan(resultWrapped.fontSize);
         });
 
         it('should handle small containers gracefully', () => {
-            const size = calculateBestFitFontSize('Test', 10, 10, baseConfig);
-            // Even 'Test' might not fit in 10x10 at size 10, but it should return min
-            expect(size).toBe(10);
+            const result = calculateBestFitFontSize('Test', 10, 10, baseConfig);
+            // Small containers trigger Emergency Shrink - fontSize can go down to HARD_FLOOR (6px)
+            expect(result.fontSize).toBeGreaterThanOrEqual(6);
+            expect(result.fontSize).toBeLessThanOrEqual(10);
         });
     });
 });
