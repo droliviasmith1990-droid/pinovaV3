@@ -749,7 +749,21 @@ async function renderElement(
             // NOTE: splitByGrapheme removed to prevent ugly mid-word breaks like "CHI-CKEN"
             // Word-boundary wrapping is preferred for marketing text
         });
-        // NOTE: clipPath removed - it caused display issues with Fabric.js 6.x\n        // The calculateFitFontSizeServer function already ensures text fits within container
+        // NOTE: clipPath removed - it caused display issues with Fabric.js 6.x
+        // The calculateFitFontSizeServer function already ensures text fits within container
+
+        // Smart Vertical Centering for Auto-Fit
+        // When text shrinks significantly, center it vertically in the bounding box
+        if (textEl.autoFit && textEl.height && textbox.height && textbox.height < textEl.height) {
+            const diff = textEl.height - textbox.height;
+            if (diff > 0) {
+                // Shift top down by half the difference
+                textbox.set('top', (textbox.top || 0) + (diff / 2));
+                if (DEBUG) {
+                    console.log(`[ServerEngine] Auto-Fit Centering: Shifted "${text.substring(0, 10)}..." down by ${diff / 2}px`);
+                }
+            }
+        }
 
         canvas.add(textbox);
         console.log(`[ServerEngine] TEXT: Added textbox to canvas`);

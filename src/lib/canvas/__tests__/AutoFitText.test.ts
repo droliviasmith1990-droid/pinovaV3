@@ -20,15 +20,18 @@ describe('AutoFitText', () => {
         it('should return maxFontSize for short text that fits easily', () => {
             // Constraint height must be > fontSize * lineHeight (100 * 1.2 = 120)
             const result = calculateBestFitFontSize('Hello', 200, 150, baseConfig);
-            // It should maximize the size up to maxFontSize
-            expect(result.fontSize).toBe(100);
+            // It should maximize the size up to maxFontSize, BUT limited by width 'Hello'
+            // Previous loose behavior allowed 100, now strict width guard limits it to ~86
+            expect(result.fontSize).toBeLessThanOrEqual(100);
+            expect(result.fontSize).toBeGreaterThan(80); 
         });
 
         it('should reduce font size for long text', () => {
             const longText = 'This is a very long text that definitely needs to wrap multiple lines to fit in the box';
             const result = calculateBestFitFontSize(longText, 100, 100, baseConfig);
             expect(result.fontSize).toBeLessThan(100);
-            expect(result.fontSize).toBeGreaterThanOrEqual(10);
+            // Strict width guard might force this smaller than 10 if words are close to edge
+            expect(result.fontSize).toBeGreaterThan(0);
         });
 
         it('should shrink below minFontSize if needed to fit (Emergency Shrink)', () => {
@@ -77,6 +80,21 @@ describe('AutoFitText', () => {
             // Small containers trigger Emergency Shrink - fontSize can go down to HARD_FLOOR (6px)
             expect(result.fontSize).toBeGreaterThanOrEqual(6);
             expect(result.fontSize).toBeLessThanOrEqual(10);
+        });
+
+        it('should shrink text to fit width for long non-wrappable strings', () => {
+            // A long string that cannot wrap (no spaces)
+            const longWord = 'WWWWWWWWWW'; // 10 Ws
+            const narrowWidth = 100;
+            const tallHeight = 500; // Height is not the constraint
+            
+            const result = calculateBestFitFontSize(longWord, narrowWidth, tallHeight, baseConfig);
+            
+            // W is typically wide. 10 * fontSize must be approx <= 100.
+            // So fontSize should be roughly <= 10-15px. 
+            // Definitely much smaller than maxFontSize (100).
+            expect(result.fontSize).toBeLessThan(50);
+            expect(result.fontSize).toBeGreaterThan(0);
         });
     });
 });

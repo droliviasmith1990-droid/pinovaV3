@@ -147,6 +147,14 @@ export function calculateBestFitFontSize(
         if (textHeight > effectiveTargetHeight) {
             return false;
         }
+
+        // Horizontal Guard: Check if text width exceeds available width
+        // Critical for long non-wrappable words (e.g. URLs) that Textbox won't wrap
+        // calcTextWidth() returns the width of the widest line
+        const effectiveTargetWidth = Math.max(1, targetWidth - SAFETY_BUFFER_X);
+        if (tempText.calcTextWidth() > effectiveTargetWidth) {
+            return false;
+        }
         
         // Soft MaxLines Constraint
         if (enforceMaxLines && config.maxLines !== undefined) {
