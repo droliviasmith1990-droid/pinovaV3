@@ -106,8 +106,8 @@ export function calculateBestFitFontSize(
     
     // Apply stricter height constraint on server to absorb rendering differences
     const isServerSide = !!config.fabricContext;
-    const SERVER_HEIGHT_BUFFER_PERCENT = 0.10; // 10% stricter on server
-    const serverHeightReduction = isServerSide ? targetHeight * SERVER_HEIGHT_BUFFER_PERCENT : 0;
+    const SERVER_HEIGHT_BUFFER_PX = 4; // Max 4px safety margin
+    const serverHeightReduction = isServerSide ? SERVER_HEIGHT_BUFFER_PX : 0;
     const effectiveTargetHeight = Math.max(1, targetHeight - BASE_SAFETY_BUFFER_Y - serverHeightReduction);
 
     const tempText = new TextboxClass(text, {
@@ -135,7 +135,13 @@ export function calculateBestFitFontSize(
      * Check if a specific configuration fits within constraints
      */
     const checkFit = (fontSize: number, spacing: number, enforceMaxLines: boolean): boolean => {
-        tempText.set({ fontSize, charSpacing: spacing });
+        // Ensure width is set correctly (in case it was modified or cached weirdly)
+        const effectiveTargetWidth = Math.max(1, targetWidth - SAFETY_BUFFER_X);
+        tempText.set({ 
+            fontSize, 
+            charSpacing: spacing,
+            width: effectiveTargetWidth 
+        });
         
         if (typeof tempText.initDimensions === 'function') {
             tempText.initDimensions();
@@ -148,12 +154,19 @@ export function calculateBestFitFontSize(
             return false;
         }
 
-        // Horizontal Guard: Check if text width exceeds available width
-        // Critical for long non-wrappable words (e.g. URLs) that Textbox won't wrap
-        // calcTextWidth() returns the width of the widest line
-        const effectiveTargetWidth = Math.max(1, targetWidth - SAFETY_BUFFER_X);
-        if (tempText.calcTextWidth() > effectiveTargetWidth) {
-            return false;
+        // Horizontal Guard with Tolerance
+        // Check if ANY line exceeds the available width + tolerance
+        // This handles long non-wrappable words and floating point rounding errors
+        const WIDTH_TOLERANCE = 1;
+
+        // Iterate through all lines (wrapped by Fabric)
+        // If any single line is wider than the container, this font size is too big
+        // We use getLineWidth(i) which returns the rendered width of line i
+        const lines = (tempText as any).textLines || (tempText as any)._textLines || [];
+        for (let i = 0; i < lines.length; i++) {
+            if (tempText.getLineWidth(i) > effectiveTargetWidth + WIDTH_TOLERANCE) {
+                return false;
+            }
         }
         
         // Soft MaxLines Constraint

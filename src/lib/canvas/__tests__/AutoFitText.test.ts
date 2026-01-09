@@ -96,5 +96,19 @@ describe('AutoFitText', () => {
             expect(result.fontSize).toBeLessThan(50);
             expect(result.fontSize).toBeGreaterThan(0);
         });
+
+        it('should wrap text to multiple lines in narrow box instead of shrinking to single line', () => {
+            // "Hello World"
+            // Box width 60 (enough for Hello, not World)
+            // Box height 100 (enough for 2 lines)
+            const text = "Hello World";
+            const result = calculateBestFitFontSize(text, 60, 100, baseConfig);
+            
+            // If it shrinks to 1 line, font size would be tiny (e.g. ~10px or less to fit "Hello World" in 60px)
+            // If it wraps to 2 lines, font size can be larger (e.g. ~20-30px)
+            
+            // We expect it to wrap and use a decent font size
+            expect(result.fontSize).toBeGreaterThan(15);
+        });
     });
 });
