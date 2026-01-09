@@ -660,6 +660,11 @@ async function renderElement(
         top: el.y,
         angle: el.rotation || 0,
         opacity: el.opacity ?? 1,
+        // Support originX/originY if present in element data (even if not in type)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        originX: (el as any).originX || 'left',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        originY: (el as any).originY || 'top',
     };
 
     if (el.type === 'text') {
@@ -756,7 +761,9 @@ async function renderElement(
         // When text shrinks significantly, center it vertically in the bounding box
         if (textEl.autoFit && textEl.height && textbox.height && textbox.height < textEl.height) {
             const diff = textEl.height - textbox.height;
-            if (diff > 0) {
+            // Only apply centering offset if the element is top-aligned
+            // Elements with originY='center' stay centered automatically when height changes
+            if (diff > 0 && (textbox.originY === 'top' || !textbox.originY)) {
                 // Shift top down by half the difference
                 textbox.set('top', (textbox.top || 0) + (diff / 2));
                 if (DEBUG) {
