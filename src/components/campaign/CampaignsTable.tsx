@@ -24,7 +24,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { deleteCampaigns, deleteCampaign } from "@/lib/db/campaigns";
+import { deleteCampaigns, deleteCampaign, pauseCampaign, resumeCampaign, updateCampaignsStatus } from "@/lib/db/campaigns";
 
 // Types
 export interface Campaign {
@@ -59,25 +59,34 @@ export function CampaignsTable({ campaigns, onRefresh }: CampaignsTableProps) {
     
     setIsProcessing(true);
 
-    // Simulate API delay
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    // In a real app, this would be: await api.campaigns.bulkUpdate(selectedIds, bulkAction);
-    
     switch (bulkAction) {
-      case 'pause':
-        toast.success(`Paused ${selectedIds.length} campaigns`);
+      case 'pause': {
+        const success = await updateCampaignsStatus(selectedIds, 'paused');
+        if (success) {
+          toast.success(`Paused ${selectedIds.length} campaigns`);
+          onRefresh?.();
+        } else {
+          toast.error('Failed to pause campaigns');
+        }
         break;
-      case 'resume':
-        toast.success(`Resumed ${selectedIds.length} campaigns`);
+      }
+      case 'resume': {
+        const success = await updateCampaignsStatus(selectedIds, 'processing');
+        if (success) {
+          toast.success(`Resumed ${selectedIds.length} campaigns`);
+          onRefresh?.();
+        } else {
+          toast.error('Failed to resume campaigns');
+        }
         break;
+      }
       case 'duplicate':
         toast.success(`Duplicated ${selectedIds.length} campaigns`);
         break;
       case 'export':
         toast.success(`Exported ${selectedIds.length} campaigns to CSV`);
         break;
-      case 'delete':
+      case 'delete': {
         const success = await deleteCampaigns(selectedIds);
         if (success) {
             toast.success(`Deleted ${selectedIds.length} campaigns`);
@@ -86,6 +95,7 @@ export function CampaignsTable({ campaigns, onRefresh }: CampaignsTableProps) {
             toast.error('Failed to delete campaigns');
         }
         break;
+      }
       default:
         toast.info(`Action ${bulkAction} applied to ${selectedIds.length} items`);
     }
@@ -222,10 +232,33 @@ function CampaignRow({ campaign, isSelected, onSelect, onRefresh }: CampaignRowP
             } else {
                 toast.error('Failed to delete campaign');
             }
-        } catch (error) {
+        } catch {
             toast.error('Error deleting campaign');
         }
     };
+
+    const handlePause = async () => {
+        const success = await pauseCampaign(campaign.id);
+        if (success) {
+            toast.success(`Campaign "${campaign.name}" paused`);
+            onRefresh?.();
+        } else {
+            toast.error('Failed to pause campaign');
+        }
+    };
+
+    const handleResume = async () => {
+        const success = await resumeCampaign(campaign.id);
+        if (success) {
+            toast.success(`Campaign "${campaign.name}" resumed`);
+            onRefresh?.();
+        } else {
+            toast.error('Failed to resume campaign');
+        }
+    };
+
+    const canPause = campaign.status === 'generating' || campaign.status === 'completed';
+    const canResume = campaign.status === 'paused';
   return (
     <div
       className={cn(
@@ -307,14 +340,18 @@ function CampaignRow({ campaign, isSelected, onSelect, onRefresh }: CampaignRowP
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-[160px]">
-            <DropdownMenuItem className="cursor-pointer">
-              <Play className="w-4 h-4 mr-2" />
-              Resume
-            </DropdownMenuItem>
-            <DropdownMenuItem className="cursor-pointer">
-              <Pause className="w-4 h-4 mr-2" />
-              Pause
-            </DropdownMenuItem>
+            {canResume && (
+              <DropdownMenuItem onClick={handleResume} className="cursor-pointer">
+                <Play className="w-4 h-4 mr-2" />
+                Resume
+              </DropdownMenuItem>
+            )}
+            {canPause && (
+              <DropdownMenuItem onClick={handlePause} className="cursor-pointer">
+                <Pause className="w-4 h-4 mr-2" />
+                Pause
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem className="cursor-pointer">
               <Copy className="w-4 h-4 mr-2" />
               Duplicate

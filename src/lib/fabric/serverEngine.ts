@@ -586,6 +586,26 @@ function getDynamicImageUrl(element: ImageElement, rowData: Record<string, strin
 }
 
 /**
+ * Rewrite MinIO public URLs to internal endpoint for server-side access.
+ * The VPS worker can't reach its own public IP (e.g. 147.93.5.32:9000),
+ * so we rewrite to the internal endpoint (e.g. localhost:9000).
+ */
+function rewriteStorageUrl(url: string): string {
+    const publicUrl = process.env.STORAGE_PUBLIC_URL;
+    const internalEndpoint = process.env.STORAGE_ENDPOINT;
+    
+    if (publicUrl && internalEndpoint && url.includes(publicUrl.replace(/^https?:\/\//, ''))) {
+        // Strip protocol for comparison, then replace
+        const publicBase = publicUrl.replace(/\/$/, '');
+        const internalBase = internalEndpoint.replace(/\/$/, '');
+        const rewritten = url.replace(publicBase, internalBase);
+        console.log(`[ServerEngine] URL rewrite: ${url.substring(0, 60)} → ${rewritten.substring(0, 60)}`);
+        return rewritten;
+    }
+    return url;
+}
+
+/**
  * Load image from URL (server-side)
  */
 async function loadImageServer(url: string): Promise<FabricImage | null> {
@@ -601,6 +621,9 @@ async function loadImageServer(url: string): Promise<FabricImage | null> {
                 fetchUrl = decodeURIComponent(originalUrl);
             }
         }
+        
+        // Rewrite MinIO public URLs to internal endpoint (VPS can't reach its own public IP)
+        fetchUrl = rewriteStorageUrl(fetchUrl);
         
         // Fetch image data
         const response = await fetch(fetchUrl, {

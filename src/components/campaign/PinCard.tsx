@@ -3,6 +3,7 @@
 import React, { useState, memo } from 'react';
 import { Download, Eye, Link2, Check, AlertCircle, Loader2, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { copyToClipboard } from '@/lib/utils/clipboard';
 import { toast } from 'sonner';
 import { SelectionCheckbox } from '@/components/ui/BulkActions';
 
@@ -41,7 +42,7 @@ export const PinCard = memo(function PinCard({
     const handleCopyUrl = async (e: React.MouseEvent) => {
         e.stopPropagation();
         try {
-            await navigator.clipboard.writeText(pin.imageUrl);
+            await copyToClipboard(pin.imageUrl);
             setIsCopied(true);
             toast.success('Image URL copied to clipboard!');
             setTimeout(() => setIsCopied(false), 2000);

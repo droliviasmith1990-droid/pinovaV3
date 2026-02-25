@@ -347,3 +347,78 @@ export async function updateCampaign(
     }
 }
 
+/**
+ * Pause a campaign
+ * @param campaignId Campaign ID to pause
+ * @returns true on success, false on error
+ */
+export async function pauseCampaign(campaignId: string): Promise<boolean> {
+    return updateCampaign(campaignId, {
+        status: 'paused',
+        paused_at: new Date().toISOString(),
+    });
+}
+
+/**
+ * Resume a paused campaign
+ * @param campaignId Campaign ID to resume
+ * @returns true on success, false on error
+ */
+export async function resumeCampaign(campaignId: string): Promise<boolean> {
+    return updateCampaign(campaignId, {
+        status: 'processing',
+        paused_at: null,
+    });
+}
+
+/**
+ * Bulk update campaign statuses
+ * @param campaignIds Array of campaign IDs
+ * @param status New status to set
+ * @returns true on success, false on error
+ */
+export async function updateCampaignsStatus(
+    campaignIds: string[],
+    status: CampaignStatus
+): Promise<boolean> {
+    if (!isSupabaseConfigured()) {
+        console.warn('Supabase not configured');
+        return false;
+    }
+
+    const userId = await getCurrentUserId();
+    if (!userId) {
+        console.error('User not authenticated');
+        return false;
+    }
+
+    try {
+        const updateData: Record<string, unknown> = {
+            status,
+            updated_at: new Date().toISOString(),
+        };
+
+        if (status === 'paused') {
+            updateData.paused_at = new Date().toISOString();
+        } else {
+            updateData.paused_at = null;
+        }
+
+        const { error } = await supabase
+            .from('campaigns')
+            .update(updateData)
+            .in('id', campaignIds)
+            .eq('user_id', userId);
+
+        if (error) {
+            console.error('Error bulk updating campaign status:', error);
+            return false;
+        }
+
+        return true;
+    } catch (error) {
+        console.error('Error bulk updating campaign status:', error);
+        return false;
+    }
+}
+

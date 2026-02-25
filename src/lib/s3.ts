@@ -57,8 +57,7 @@ export const isStorageConfigured = (): boolean => {
     return Boolean(getAccessKey() && getSecretKey());
 };
 
-/** @deprecated Alias for isStorageConfigured — kept so callers don't break */
-export const isTebiConfigured = isStorageConfigured;
+
 
 // ============================================
 // S3 Client Factory (with caching)

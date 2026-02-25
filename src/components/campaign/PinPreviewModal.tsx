@@ -4,6 +4,7 @@ import React, { useEffect, useCallback } from 'react';
 import Image from 'next/image';
 import { X, ChevronLeft, ChevronRight, Download, Link2, Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { copyToClipboard } from '@/lib/utils/clipboard';
 import { PinCardData } from './PinCard';
 import { toast } from 'sonner';
 
@@ -60,7 +61,7 @@ export function PinPreviewModal({ pin, pins, onClose, onNavigate }: PinPreviewMo
     const handleCopyUrl = async () => {
         if (!pin?.imageUrl) return;
         try {
-            await navigator.clipboard.writeText(pin.imageUrl);
+            await copyToClipboard(pin.imageUrl);
             setIsCopied(true);
             toast.success('URL copied!');
             setTimeout(() => setIsCopied(false), 2000);
