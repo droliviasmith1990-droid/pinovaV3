@@ -1,6 +1,5 @@
 import Papa from 'papaparse';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
-import { v4 as uuidv4 } from 'uuid';
+import { uploadCampaignPin } from '@/lib/s3';
 import { Element, ImageElement } from '@/types/editor';
 import { setupFabricServerPolyfills } from '@/lib/fabric/server-polyfill';
 import { createServiceRoleClient } from "@/lib/supabaseServer";
@@ -18,7 +17,7 @@ function getSupabase() {
 // Debug flag - disable in production for performance
 const DEBUG = process.env.NODE_ENV !== 'production' && process.env.WORKER_DEBUG === 'true';
 
-// Initialize S3 Client for Tebi
+// Campaign data cache interface
 interface CachedCampaignData {
     timestamp: number;
     elements: Element[];
@@ -33,57 +32,7 @@ declare global {
     var campaignCache: Map<string, CachedCampaignData>;
 }
 
-// OPTIMIZATION: Cache S3 client at module level (Issue #1)
-let _s3Client: S3Client | null = null;
-function getS3Client(): S3Client {
-    if (_s3Client) return _s3Client;
-    
-    // Handle TEBI_ENDPOINT with or without https:// prefix
-    const rawEndpoint = process.env.TEBI_ENDPOINT || '';
-    const endpoint = rawEndpoint.startsWith('https://') || rawEndpoint.startsWith('http://')
-        ? rawEndpoint
-        : `https://${rawEndpoint}`;
-    
-    _s3Client = new S3Client({
-        region: 'auto',
-        endpoint,
-        credentials: {
-            accessKeyId: process.env.TEBI_ACCESS_KEY!,
-            secretAccessKey: process.env.TEBI_SECRET_KEY!,
-        },
-        forcePathStyle: true,
-    });
-    
-    return _s3Client;
-}
 
-// Upload to S3
-async function uploadToS3(
-    s3Client: S3Client,
-    buffer: Buffer,
-    campaignId: string,
-    pinIndex: number
-): Promise<string> {
-    const bucket = process.env.TEBI_BUCKET!;
-    const key = `campaigns/${campaignId}/pin-${pinIndex}-${uuidv4().substring(0, 8)}.jpg`;
-
-    await s3Client.send(
-        new PutObjectCommand({
-            Bucket: bucket,
-            Key: key,
-            Body: buffer,
-            ContentType: 'image/jpeg',
-            ACL: 'public-read',
-        })
-    );
-
-    // Generate public URL - handle TEBI_ENDPOINT with or without https://
-    const rawEndpoint = process.env.TEBI_ENDPOINT || '';
-    const baseUrl = rawEndpoint.startsWith('https://') || rawEndpoint.startsWith('http://')
-        ? rawEndpoint
-        : `https://${rawEndpoint}`;
-    return `${baseUrl}/${bucket}/${key}`;
-}
 
 export async function processCampaignBatch(jobData: CampaignJobData) {
     const {
@@ -279,7 +228,7 @@ export async function processCampaignBatch(jobData: CampaignJobData) {
 
     if (DEBUG) console.log(`[Worker] Processing batch of ${csvRows.length} pins for campaign ${campaignId}`);
 
-    const s3Client = getS3Client();
+
     const batchResults: { index: number; success: boolean; url?: string; error?: string; rowData: Record<string, string> }[] = [];
 
     // Debug logging (only when DEBUG is enabled)
@@ -404,7 +353,8 @@ export async function processCampaignBatch(jobData: CampaignJobData) {
                 const pinIndex = startIndex + i + chunkIndex;
                 try {
                     const buffer = await renderSinglePin(rowData, pinIndex);
-                    const url = await uploadToS3(s3Client, buffer, campaignId, pinIndex);
+                    const url = await uploadCampaignPin(buffer, campaignId, pinIndex);
+                    if (!url) throw new Error('Storage upload failed');
                     
                     return {
                         index: pinIndex,

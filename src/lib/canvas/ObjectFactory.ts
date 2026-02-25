@@ -674,7 +674,7 @@ export async function loadFabricImage(
     element: ImageElement
 ): Promise<fabric.FabricImage | null> {
     // Handle CORS by using proxy for external URLs
-    const knownCorsBlockedDomains = ['s3.tebi.io', 'tebi.io', 'amazonaws.com'];
+    const knownCorsBlockedDomains = ['147.93.5.32', 'amazonaws.com'];
     const needsProxy = knownCorsBlockedDomains.some(d => imageUrl.includes(d));
 
     const urlToLoad = needsProxy

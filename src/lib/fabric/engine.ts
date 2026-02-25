@@ -223,8 +223,8 @@ export function getDynamicImageUrl(element: ImageElement, rowData: Record<string
     const src = element.imageUrl || '';
     
     // For Canva backgrounds, use proxy ONLY if not on our storage
-    // Now that CORS is enabled on Tebi, we can load directly
-    if (element.isCanvaBackground && src && !src.includes('tebi.io') && !src.includes('public.blob.vercel-storage.com')) {
+    // MinIO on our VPS has CORS enabled, so we can load directly
+    if (element.isCanvaBackground && src && !src.includes('147.93.5.32') && !src.includes('public.blob.vercel-storage.com')) {
         // If src is already a proxy URL, return as-is
         if (src.startsWith('/api/proxy-image')) {
             return src;

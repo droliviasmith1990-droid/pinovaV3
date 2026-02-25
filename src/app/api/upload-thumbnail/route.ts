@@ -1,12 +1,12 @@
 // API Route: Upload Template Thumbnail
 // POST /api/upload-thumbnail
-// Uploads template thumbnail image to Tebi S3
+// Uploads template thumbnail image to storage
 // SECURITY: Uses authenticated session to verify user ownership
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { cookies, headers } from 'next/headers';
-import { uploadToS3, getThumbnailKey, isTebiConfigured } from '@/lib/s3';
+import { uploadToS3, getThumbnailKey, isStorageConfigured } from '@/lib/s3';
 
 interface UploadThumbnailRequest {
     templateId: string;
@@ -52,8 +52,8 @@ async function getAuthenticatedSupabase() {
 
 export async function POST(request: NextRequest) {
     try {
-        // Check if Tebi is configured
-        if (!isTebiConfigured()) {
+        // Check if storage is configured
+        if (!isStorageConfigured()) {
             return NextResponse.json(
                 { error: 'Storage not configured' },
                 { status: 503 }

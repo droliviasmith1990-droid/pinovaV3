@@ -13,18 +13,15 @@ const nextConfig: NextConfig = {
   images: {
     remotePatterns: [
       {
-        protocol: 'https',
-        hostname: 's3.tebi.io',
-        pathname: '/**',
-      },
-      {
-        protocol: 'https',
-        hostname: '*.tebi.io',
+        // MinIO storage on VPS
+        protocol: 'http' as const,
+        hostname: '147.93.5.32',
+        port: '9000',
         pathname: '/**',
       },
       {
         // Vercel Blob for fonts
-        protocol: 'https',
+        protocol: 'https' as const,
         hostname: '*.public.blob.vercel-storage.com',
         pathname: '/**',
       },

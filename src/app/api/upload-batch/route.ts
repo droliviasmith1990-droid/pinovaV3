@@ -3,7 +3,7 @@
 // Uploads multiple pins in a single request for 10x faster generation
 
 import { NextRequest, NextResponse } from 'next/server';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { isStorageConfigured, uploadToS3 } from '@/lib/s3';
 
 // Route Segment Config
 export const runtime = 'nodejs';
@@ -33,46 +33,16 @@ interface BatchUploadResult {
     error?: string;
 }
 
-// Check if S3/Tebi is configured
-function isTebiConfigured(): boolean {
-    return !!(
-        process.env.TEBI_ENDPOINT &&
-        process.env.TEBI_ACCESS_KEY &&
-        process.env.TEBI_SECRET_KEY &&
-        process.env.TEBI_BUCKET
-    );
-}
-
-// Create S3 client for Tebi
-function createS3Client(): S3Client | null {
-    if (!isTebiConfigured()) return null;
-
-    let endpoint = process.env.TEBI_ENDPOINT!;
-    if (!endpoint.startsWith('http')) {
-        endpoint = `https://${endpoint}`;
-    }
-
-    return new S3Client({
-        endpoint,
-        region: 'us-east-1',
-        credentials: {
-            accessKeyId: process.env.TEBI_ACCESS_KEY!,
-            secretAccessKey: process.env.TEBI_SECRET_KEY!,
-        },
-        forcePathStyle: true,
-    });
-}
-
 export async function POST(request: NextRequest) {
     const startTime = Date.now();
     log('Batch upload started');
 
     try {
-        // Check if Tebi is configured
-        if (!isTebiConfigured()) {
-            log('Tebi not configured');
+        // Check if storage is configured
+        if (!isStorageConfigured()) {
+            log('Storage not configured');
             return NextResponse.json(
-                { error: 'Storage not configured', details: 'Missing TEBI environment variables' },
+                { error: 'Storage not configured', details: 'Missing STORAGE environment variables' },
                 { status: 503 }
             );
         }
@@ -90,21 +60,7 @@ export async function POST(request: NextRequest) {
 
         log(`Processing batch of ${pins.length} pins for campaign ${campaignId}`);
 
-        // Create S3 client
-        const s3Client = createS3Client();
-        if (!s3Client) {
-            log('Failed to create S3 client');
-            return NextResponse.json(
-                { error: 'Failed to initialize storage client' },
-                { status: 500 }
-            );
-        }
-
-        const bucket = process.env.TEBI_BUCKET!;
-        const endpoint = process.env.TEBI_ENDPOINT || 's3.tebi.io';
-        const baseUrl = endpoint.startsWith('http') ? endpoint : `https://${endpoint}`;
-
-        // Upload all pins in parallel
+        // Upload all pins in parallel using shared uploadToS3
         const results: BatchUploadResult[] = await Promise.all(
             pins.map(async (pin): Promise<BatchUploadResult> => {
                 try {
@@ -122,16 +78,16 @@ export async function POST(request: NextRequest) {
                     const extension = contentType === 'image/jpeg' ? 'jpg' : 'png';
                     const key = `pins/${campaignId}/${pin.pinNumber}-${timestamp}.${extension}`;
 
-                    // Upload to S3
-                    await s3Client.send(new PutObjectCommand({
-                        Bucket: bucket,
-                        Key: key,
-                        Body: buffer,
-                        ContentType: contentType,
-                        ACL: 'public-read',
-                    }));
+                    // Upload via shared module
+                    const url = await uploadToS3(key, buffer, contentType);
 
-                    const url = `${baseUrl}/${bucket}/${key}`;
+                    if (!url) {
+                        return {
+                            pinNumber: pin.pinNumber,
+                            success: false,
+                            error: 'Upload returned null',
+                        };
+                    }
 
                     return {
                         pinNumber: pin.pinNumber,

@@ -6,7 +6,7 @@
 
 /**
  * Generate cache-busted thumbnail URL using Unix epoch timestamp.
- * Only applies to internal S3/Tebi.io URLs, not external images.
+ * Only applies to internal storage URLs, not external images.
  * 
  * @param thumbnailUrl - The original thumbnail URL
  * @param updatedAt - ISO timestamp string (from database updated_at field)
@@ -19,7 +19,7 @@ export function getCacheBustedThumbnailUrl(
     if (!thumbnailUrl) return null;
     
     // Only add cache-buster to internal storage URLs
-    const isInternalUrl = thumbnailUrl.includes('tebi.io') || 
+    const isInternalUrl = thumbnailUrl.includes('147.93.5.32') || 
                           thumbnailUrl.includes('s3.') ||
                           thumbnailUrl.includes('/thumbnails/');
     

@@ -1,55 +1,110 @@
-// S3 Client for Tebi Storage
-// Server-side only - uses environment variables for credentials
+// S3-Compatible Storage Client (MinIO)
+// Server-side only - uses STORAGE_* environment variables for credentials
+// All env vars are read LAZILY inside functions to avoid race conditions
+// with dotenv loading order in worker contexts.
 
 import {
     S3Client,
     PutObjectCommand,
     DeleteObjectCommand,
-    HeadObjectCommand
+    HeadObjectCommand,
+    ListObjectsV2Command,
+    DeleteObjectsCommand,
 } from '@aws-sdk/client-s3';
 import { debugLog, debugError, debugWarn } from '@/lib/utils/debug';
+import { v4 as uuidv4 } from 'uuid';
 
-// Environment variables (server-side only)
-const TEBI_ACCESS_KEY = process.env.TEBI_ACCESS_KEY;
-const TEBI_SECRET_KEY = process.env.TEBI_SECRET_KEY;
-const TEBI_ENDPOINT = process.env.TEBI_ENDPOINT || 'https://s3.tebi.io';
-const TEBI_BUCKET = process.env.TEBI_BUCKET || 'pinterest-templates';
+// ============================================
+// Lazy Environment Variable Getters
+// ============================================
 
-// Check if Tebi is configured
-export const isTebiConfigured = (): boolean => {
-    return Boolean(TEBI_ACCESS_KEY && TEBI_SECRET_KEY);
+function getAccessKey(): string | undefined {
+    return process.env.STORAGE_ACCESS_KEY;
+}
+
+function getSecretKey(): string | undefined {
+    return process.env.STORAGE_SECRET_KEY;
+}
+
+/** Internal endpoint for S3Client connections (e.g. http://localhost:9000) */
+function getEndpoint(): string {
+    const endpoint = process.env.STORAGE_ENDPOINT || 'http://localhost:9000';
+    if (!endpoint.startsWith('http')) {
+        return `https://${endpoint}`;
+    }
+    return endpoint;
+}
+
+/** Public base URL for browser-accessible image URLs (e.g. http://147.93.5.32:9000) */
+function getPublicBaseUrl(): string {
+    const publicUrl = process.env.STORAGE_PUBLIC_URL || 'http://147.93.5.32:9000';
+    if (!publicUrl.startsWith('http')) {
+        return `https://${publicUrl}`;
+    }
+    return publicUrl;
+}
+
+function getStorageBucket(): string {
+    return process.env.STORAGE_BUCKET || 'pinova-storage';
+}
+
+// ============================================
+// Storage Configuration Check
+// ============================================
+
+/** Check if storage is configured */
+export const isStorageConfigured = (): boolean => {
+    return Boolean(getAccessKey() && getSecretKey());
 };
 
-// Create S3 client for Tebi
+/** @deprecated Alias for isStorageConfigured — kept so callers don't break */
+export const isTebiConfigured = isStorageConfigured;
+
+// ============================================
+// S3 Client Factory (with caching)
+// ============================================
+
+// Cache client at module level to avoid creating a new one per call
+let _cachedS3Client: S3Client | null = null;
+let _cachedCredentials: string | null = null;
+
+/** Create S3 client pointing to the internal storage endpoint (cached) */
 export const createS3Client = (): S3Client | null => {
-    if (!isTebiConfigured()) {
-        debugWarn('S3', 'Tebi S3 credentials not configured');
+    if (!isStorageConfigured()) {
+        debugWarn('S3', 'Storage credentials not configured');
         return null;
     }
 
-    let endpoint = TEBI_ENDPOINT;
-    if (!endpoint.startsWith('http')) {
-        endpoint = `https://${endpoint}`;
+    // Invalidate cache if credentials changed (hot-reload scenario)
+    const credentialKey = `${getAccessKey()}:${getSecretKey()}:${getEndpoint()}`;
+    if (_cachedS3Client && _cachedCredentials === credentialKey) {
+        return _cachedS3Client;
     }
 
-    return new S3Client({
+    _cachedS3Client = new S3Client({
         region: 'auto',
-        endpoint,
+        endpoint: getEndpoint(),
         credentials: {
-            accessKeyId: TEBI_ACCESS_KEY!,
-            secretAccessKey: TEBI_SECRET_KEY!,
+            accessKeyId: getAccessKey()!,
+            secretAccessKey: getSecretKey()!,
         },
-        forcePathStyle: true, // Required for Tebi S3 compatibility
+        forcePathStyle: true, // Required for MinIO path-style access
     });
+    _cachedCredentials = credentialKey;
+
+    return _cachedS3Client;
 };
 
-// Get bucket name
-export const getBucket = (): string => TEBI_BUCKET;
+// ============================================
+// Public URL & Bucket Accessors
+// ============================================
 
-// Get public URL for an object
+/** Get bucket name */
+export const getBucket = (): string => getStorageBucket();
+
+/** Get public URL for an object (browser-accessible) */
 export const getPublicUrl = (key: string): string => {
-    // Tebi public URL format
-    return `${TEBI_ENDPOINT}/${TEBI_BUCKET}/${key}`;
+    return `${getPublicBaseUrl()}/${getStorageBucket()}/${key}`;
 };
 
 // ============================================
@@ -83,7 +138,7 @@ export async function uploadToS3(
             Key: key,
             Body: body,
             ContentType: contentType,
-            ACL: 'public-read', // Make the file publicly accessible
+            ACL: 'public-read',
         });
 
         await s3Client.send(command);
@@ -93,6 +148,43 @@ export async function uploadToS3(
     } catch (error) {
         debugError('S3', 'Error uploading to S3:', error);
         debugError('S3', 'Error details:', error instanceof Error ? error.message : 'Unknown error');
+        return null;
+    }
+}
+
+/**
+ * Upload a campaign-generated pin (JPEG) to S3.
+ * Key format: campaigns/{campaignId}/pin-{n}-{uuid8}.jpg
+ * @returns Public URL of uploaded pin or null on error
+ */
+export async function uploadCampaignPin(
+    buffer: Buffer,
+    campaignId: string,
+    pinIndex: number
+): Promise<string | null> {
+    const key = `campaigns/${campaignId}/pin-${pinIndex}-${uuidv4().substring(0, 8)}.jpg`;
+    debugLog('S3', 'uploadCampaignPin called with key:', key);
+
+    const s3Client = createS3Client();
+    if (!s3Client) {
+        debugError('S3', 'Failed to create S3 client for campaign pin');
+        return null;
+    }
+
+    try {
+        await s3Client.send(new PutObjectCommand({
+            Bucket: getBucket(),
+            Key: key,
+            Body: buffer,
+            ContentType: 'image/jpeg',
+            ACL: 'public-read',
+        }));
+
+        const url = getPublicUrl(key);
+        debugLog('S3', 'Campaign pin upload successful, URL:', url);
+        return url;
+    } catch (error) {
+        debugError('S3', 'Error uploading campaign pin:', error);
         return null;
     }
 }
@@ -118,6 +210,56 @@ export async function deleteFromS3(key: string): Promise<boolean> {
         return true;
     } catch (error) {
         debugError('S3', 'Error deleting from S3:', error);
+        return false;
+    }
+}
+
+/**
+ * Delete all objects with a given prefix (bulk folder deletion).
+ * Handles pagination for >1000 objects.
+ * @param prefix S3 key prefix to match
+ * @returns true if all deleted (or none found), false on error
+ */
+export async function deleteObjectsWithPrefix(prefix: string): Promise<boolean> {
+    const s3Client = createS3Client();
+    if (!s3Client) {
+        return false;
+    }
+
+    const bucket = getBucket();
+
+    try {
+        let continuationToken: string | undefined;
+
+        do {
+            const listCommand = new ListObjectsV2Command({
+                Bucket: bucket,
+                Prefix: prefix,
+                MaxKeys: 1000,
+                ContinuationToken: continuationToken,
+            });
+
+            const listResult = await s3Client.send(listCommand);
+
+            if (!listResult.Contents || listResult.Contents.length === 0) {
+                break;
+            }
+
+            const deleteCommand = new DeleteObjectsCommand({
+                Bucket: bucket,
+                Delete: {
+                    Objects: listResult.Contents.map(obj => ({ Key: obj.Key! })),
+                    Quiet: true,
+                },
+            });
+
+            await s3Client.send(deleteCommand);
+            continuationToken = listResult.IsTruncated ? listResult.NextContinuationToken : undefined;
+        } while (continuationToken);
+
+        return true;
+    } catch (error) {
+        debugError('S3', 'Error deleting objects with prefix:', prefix, error);
         return false;
     }
 }
@@ -165,8 +307,17 @@ export function getPinKey(userId: string, campaignId: string, pinNumber: number)
 }
 
 /**
- * Generate S3 key prefix for campaign pins folder
+ * Generate S3 key prefix for worker-generated campaign pins.
+ * Matches upload path: campaigns/{campaignId}/pin-{n}-{uuid8}.jpg
  */
 export function getCampaignPinsPrefix(userId: string, campaignId: string): string {
-    return `pins/${userId}/${campaignId}/`;
+    return `campaigns/${campaignId}/`;
+}
+
+/**
+ * Generate S3 key prefix for API-uploaded pins.
+ * Matches upload path: pins/{campaignId}/{rowIndex}-{timestamp}.{ext}
+ */
+export function getApiPinsPrefix(campaignId: string): string {
+    return `pins/${campaignId}/`;
 }

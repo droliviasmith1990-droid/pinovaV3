@@ -209,8 +209,8 @@ export function extractImageUrls(
             let finalUrl = el.imageUrl;
 
             // For Canva backgrounds, apply proxy logic to match getDynamicImageUrl
-            // ONLY check for proxy if NOT on Tebi/S3, as we now have CORS enabled
-            if (el.isCanvaBackground && !el.imageUrl.includes('tebi.io') && !el.imageUrl.includes('public.blob.vercel-storage.com')) {
+            // ONLY check for proxy if NOT on our storage, as MinIO has CORS enabled
+            if (el.isCanvaBackground && !el.imageUrl.includes('147.93.5.32') && !el.imageUrl.includes('public.blob.vercel-storage.com')) {
                 // If already a proxy URL or data URL, use as-is
                 if (el.imageUrl.startsWith('/api/proxy-image') || el.imageUrl.startsWith('data:')) {
                     finalUrl = el.imageUrl;

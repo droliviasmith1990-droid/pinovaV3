@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { S3Client, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { createS3Client, getBucket } from '@/lib/s3';
 
 // Initialize Supabase client - with fallback to anon key
 function getSupabaseClient() {
@@ -16,27 +17,6 @@ function getSupabaseClient() {
     }
 
     return createClient(supabaseUrl, supabaseKey);
-}
-
-// Initialize S3 client for Tebi - returns null if config missing
-function getS3Client() {
-    const endpoint = process.env.TEBI_ENDPOINT;
-    const accessKey = process.env.TEBI_ACCESS_KEY;
-    const secretKey = process.env.TEBI_SECRET_KEY;
-
-    if (!endpoint || !accessKey || !secretKey) {
-        console.warn('[delete-pin] Missing Tebi S3 configuration - S3 deletion will be skipped');
-        return null;
-    }
-
-    return new S3Client({
-        endpoint,
-        region: 'global',
-        credentials: {
-            accessKeyId: accessKey,
-            secretAccessKey: secretKey,
-        },
-    });
 }
 
 // DELETE /api/generated-pins/[pinId] - Delete a single pin
@@ -97,25 +77,38 @@ export async function DELETE(
 
         // Try to delete from S3 if there's an image URL (optional, don't fail if S3 not configured)
         if (pin.image_url) {
-            const s3Client = getS3Client();
-            const bucket = process.env.TEBI_BUCKET;
+            const s3Client = createS3Client();
+            const bucket = getBucket();
 
-            if (s3Client && bucket) {
+            if (s3Client) {
                 try {
-                    // Extract key from URL
+                    // Extract key from URL — works for any S3-compatible storage URL
                     const url = new URL(pin.image_url);
-                    const key = url.pathname.startsWith('/')
-                        ? url.pathname.slice(1)
-                        : url.pathname;
+                    
+                    // Only attempt deletion if URL points to our current storage
+                    // Old URLs from a previous provider (e.g. Tebi) can't be deleted via our MinIO client
+                    const storagePublicUrl = process.env.STORAGE_PUBLIC_URL || '147.93.5.32';
+                    if (!pin.image_url.includes(storagePublicUrl.replace(/^https?:\/\//, ''))) {
+                        console.log('[delete-pin] Skipping S3 deletion - URL points to old/different storage:', pin.image_url.substring(0, 60));
+                    } else {
+                        let key = url.pathname.startsWith('/')
+                            ? url.pathname.slice(1)
+                            : url.pathname;
 
-                    console.log(`[delete-pin] Deleting S3 object: ${key}`);
+                        // If the path includes the bucket name as prefix, strip it
+                        if (key.startsWith(`${bucket}/`)) {
+                            key = key.slice(bucket.length + 1);
+                        }
 
-                    await s3Client.send(new DeleteObjectCommand({
-                        Bucket: bucket,
-                        Key: key,
-                    }));
+                        console.log(`[delete-pin] Deleting S3 object: ${key}`);
 
-                    console.log('[delete-pin] S3 object deleted');
+                        await s3Client.send(new DeleteObjectCommand({
+                            Bucket: bucket,
+                            Key: key,
+                        }));
+
+                        console.log('[delete-pin] S3 object deleted');
+                    }
                 } catch (s3Error) {
                     // Log but don't fail - S3 deletion is optional
                     console.warn('[delete-pin] S3 deletion failed (non-fatal):', s3Error);

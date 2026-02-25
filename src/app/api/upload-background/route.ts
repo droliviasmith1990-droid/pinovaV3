@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
-import { uploadToS3, isTebiConfigured } from '@/lib/s3';
+import { uploadToS3, isStorageConfigured } from '@/lib/s3';
 
 // Allowed file types and max size
 const ALLOWED_TYPES = ['image/svg+xml', 'image/png', 'image/jpeg', 'image/jpg'];
@@ -15,10 +15,10 @@ export async function POST(request: NextRequest) {
 
     try {
         // Check if S3 is configured
-        if (!isTebiConfigured()) {
-            console.error('[upload-background] Tebi S3 not configured');
+        if (!isStorageConfigured()) {
+            console.error('[upload-background] Storage not configured');
             return NextResponse.json(
-                { success: false, error: 'Storage not configured. Please check TEBI_ACCESS_KEY and TEBI_SECRET_KEY in .env.local' },
+                { success: false, error: 'Storage not configured. Please check STORAGE_ACCESS_KEY and STORAGE_SECRET_KEY in .env.local' },
                 { status: 500 }
             );
         }

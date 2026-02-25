@@ -1,12 +1,12 @@
 // API Route: Upload Generated Pin
 // POST /api/upload-pin
-// Uploads generated pin image to Tebi S3 using streaming
+// Uploads generated pin image to storage using streaming
 
 import { NextRequest, NextResponse } from 'next/server';
-import { S3Client } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { Readable } from 'stream';
 import { UploadPinMetadataSchema, validateRequest } from '@/lib/validations';
+import { isStorageConfigured, createS3Client, getBucket, getPublicUrl } from '@/lib/s3';
 
 // Route Segment Config: Increase body size limit to 10MB
 export const runtime = 'nodejs';
@@ -16,46 +16,15 @@ export const maxDuration = 60; // 60 seconds timeout for large uploads
 const DEBUG = process.env.NODE_ENV === 'development';
 const log = (...args: unknown[]) => DEBUG && console.log(...args);
 
-// Check if S3/Tebi is configured
-function isTebiConfigured(): boolean {
-    return !!(
-        process.env.TEBI_ENDPOINT &&
-        process.env.TEBI_ACCESS_KEY &&
-        process.env.TEBI_SECRET_KEY &&
-        process.env.TEBI_BUCKET
-    );
-}
-
-// Create S3 client for Tebi
-function createS3Client(): S3Client | null {
-    if (!isTebiConfigured()) return null;
-
-    let endpoint = process.env.TEBI_ENDPOINT!;
-    // Ensure properly formatted endpoint
-    if (!endpoint.startsWith('http')) {
-        endpoint = `https://${endpoint}`;
-    }
-
-    return new S3Client({
-        endpoint,
-        region: 'us-east-1',
-        credentials: {
-            accessKeyId: process.env.TEBI_ACCESS_KEY!,
-            secretAccessKey: process.env.TEBI_SECRET_KEY!,
-        },
-        forcePathStyle: true,
-    });
-}
-
 export async function POST(request: NextRequest) {
     log('[upload-pin] Route handler started');
 
     try {
-        // Check if Tebi is configured
-        if (!isTebiConfigured()) {
-            log('[upload-pin] Tebi not configured');
+        // Check if storage is configured
+        if (!isStorageConfigured()) {
+            log('[upload-pin] Storage not configured');
             return NextResponse.json(
-                { error: 'Storage not configured', details: 'Missing TEBI environment variables' },
+                { error: 'Storage not configured', details: 'Missing STORAGE environment variables' },
                 { status: 503 }
             );
         }
@@ -103,7 +72,7 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Create S3 client
+        // Create S3 client from shared module
         const s3Client = createS3Client();
         if (!s3Client) {
             log('[upload-pin] Failed to create S3 client');
@@ -121,9 +90,8 @@ export async function POST(request: NextRequest) {
         else if (file.type === 'image/webp') extension = 'webp';
         
         const key = `pins/${campaign_id}/${rowIndex}-${timestamp}.${extension}`;
-        const bucket = process.env.TEBI_BUCKET!;
 
-        log('[upload-pin] Uploading to:', { bucket, key, contentType: file.type });
+        log('[upload-pin] Uploading to:', { bucket: getBucket(), key, contentType: file.type });
 
         // PERFORMANCE: Stream upload instead of buffering entire file in memory
         // Convert Web Stream to Node.js Readable stream for AWS SDK
@@ -133,7 +101,7 @@ export async function POST(request: NextRequest) {
         const upload = new Upload({
             client: s3Client,
             params: {
-                Bucket: bucket,
+                Bucket: getBucket(),
                 Key: key,
                 Body: fileStream,
                 ContentType: file.type || `image/${extension}`,
@@ -144,10 +112,8 @@ export async function POST(request: NextRequest) {
 
         await upload.done();
 
-        // Generate public URL
-        const endpoint = process.env.TEBI_ENDPOINT || 's3.tebi.io';
-        const baseUrl = endpoint.startsWith('http') ? endpoint : `https://${endpoint}`;
-        const url = `${baseUrl}/${bucket}/${key}`;
+        // Generate public URL via shared module
+        const url = getPublicUrl(key);
 
         log('[upload-pin] Upload successful:', url);
 

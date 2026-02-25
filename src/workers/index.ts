@@ -14,8 +14,8 @@ import { scheduleCleanupJob } from '../lib/queue';
 
 console.log('[Worker] All imports loaded');
 
-// Load environment variables
-dotenv.config();
+// Load environment variables from .env.local
+dotenv.config({ path: '.env.local' });
 
 const connectionStr = process.env.REDIS_URL || 'redis://localhost:6379';
 const connection = new Redis(connectionStr, {
